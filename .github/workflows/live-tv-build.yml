@@ -1,0 +1,166 @@
+name: Build Nuvio Live TV
+
+# Builds the Android APKs and the Windows installer for the custom Live TV
+# branch and publishes them as a GitHub Release you can download on any device.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - Dev
+      - main
+      - custom/live-tv-neon
+    paths-ignore:
+      - "**.md"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: live-tv-build
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    env:
+      KEYSTORE_BASE64: ${{ secrets.LIVE_TV_KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.LIVE_TV_KEYSTORE_PASSWORD }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Prepare signing key
+        run: |
+          keystore="${RUNNER_TEMP}/live-tv.jks"
+          if [[ -n "${KEYSTORE_BASE64}" && -n "${KEYSTORE_PASSWORD}" ]]; then
+            printf '%s' "${KEYSTORE_BASE64}" | base64 --decode > "${keystore}"
+            password="${KEYSTORE_PASSWORD}"
+          else
+            echo "::warning::No LIVE_TV_KEYSTORE secrets set; using a one-off key. Installing a later build will require uninstalling this one first."
+            password="live-tv-$(date +%s)"
+            keytool -genkeypair -noprompt -keystore "${keystore}" -storepass "${password}" -keypass "${password}" \
+              -alias livetv -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Nuvio Live TV"
+          fi
+          {
+            echo "NUVIO_RELEASE_STORE_FILE=${keystore}"
+            echo "NUVIO_RELEASE_STORE_PASSWORD=${password}"
+            echo "NUVIO_RELEASE_KEY_ALIAS=livetv"
+            echo "NUVIO_RELEASE_KEY_PASSWORD=${password}"
+          } > local.properties
+
+      - name: Build APKs
+        run: ./gradlew :androidApp:assembleFullRelease -Pnuvio.android.applicationId=com.nuvio.app.livetv --stacktrace
+
+      - name: Rename APKs
+        run: |
+          mkdir -p out
+          for apk in androidApp/build/outputs/apk/full/release/*.apk; do
+            name="$(basename "${apk}")"
+            case "${name}" in
+              *arm64-v8a*)   cp "${apk}" out/Nuvio-LiveTV-Android-phone.apk ;;
+              *armeabi-v7a*) cp "${apk}" out/Nuvio-LiveTV-Android-older-32bit.apk ;;
+              *x86_64*)      cp "${apk}" out/Nuvio-LiveTV-Android-x86_64.apk ;;
+              *x86*)         cp "${apk}" out/Nuvio-LiveTV-Android-x86.apk ;;
+              *)             cp "${apk}" "out/${name}" ;;
+            esac
+          done
+          ls -la out
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v7
+        with:
+          name: android
+          path: out/*.apk
+          if-no-files-found: error
+
+  windows:
+    name: Windows installer
+    runs-on: windows-2022
+    env:
+      WEBVIEW2_VERSION: 1.0.4078.44
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Fetch Windows player runtime
+        shell: bash
+        run: |
+          # Forks don't copy Git LFS files; read them from the official repository.
+          git config lfs.url https://github.com/NuvioMedia/NuvioDesktop.git/info/lfs
+          git lfs pull --include="composeApp/src/desktopMain/native/windows/runtime/**,composeApp/src/desktopMain/resources/torrserver/windows-amd64/TorrServer.exe" --exclude=""
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Install WebView2 SDK
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 -Version $env:WEBVIEW2_VERSION -OutputDirectory "$env:RUNNER_TEMP\nuget" -DirectDownload -NonInteractive -NoCache
+          "WEBVIEW2_ROOT=$env:RUNNER_TEMP\nuget\Microsoft.Web.WebView2.$env:WEBVIEW2_VERSION" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          & .\gradlew.bat :composeApp:packageReleaseMsi `
+            "-Pnuvio.webview2.dir=$env:WEBVIEW2_ROOT" `
+            "-Pcompose.desktop.packaging.checkJdkVendor=false" `
+            --no-configuration-cache --no-daemon --stacktrace
+
+      - name: Collect installer
+        shell: bash
+        run: |
+          mkdir -p out
+          cp composeApp/build/compose/release-msis/*.msi out/Nuvio-LiveTV-Windows.msi
+          ls -la out
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: out/*.msi
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [android, windows]
+    if: ${{ !cancelled() && (needs.android.result == 'success' || needs.windows.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download builds
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="live-tv-build-${GITHUB_RUN_NUMBER}"
+          cat > notes.md <<'NOTES'
+          **Android:** download `Nuvio-LiveTV-Android-phone.apk` on your phone or Android TV, open it, and allow installing from this source when asked.
+          It installs next to the official Nuvio app as **Nuvio Live TV**.
+
+          **Windows:** download `Nuvio-LiveTV-Windows.msi` and double-click it.
+
+          Sign in with your Nuvio account, then open the **Live TV** tab and paste your addon's manifest link.
+          NOTES
+          gh release create "${tag}" dist/* --title "Nuvio Live TV — build ${GITHUB_RUN_NUMBER}" --notes-file notes.md --target "${GITHUB_SHA}" --latest
