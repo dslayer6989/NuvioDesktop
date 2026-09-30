@@ -39,6 +39,9 @@ jobs:
       KEYSTORE_BASE64: ${{ secrets.LIVE_TV_KEYSTORE_BASE64 }}
       KEYSTORE_PASSWORD: ${{ secrets.LIVE_TV_KEYSTORE_PASSWORD }}
     steps:
+      # Leave persist-credentials at its default for both checkouts. Nuvio's repositories list
+      # sub-projects (such as libass-android) without addresses, so git's submodule clean-up fails;
+      # with the default setting that happens after the build, as a harmless warning.
       - name: Get the Live TV patch from this repository
         uses: actions/checkout@v6
         with:
@@ -46,7 +49,6 @@ jobs:
           sparse-checkout: |
             android-live-tv.patch
           sparse-checkout-cone-mode: false
-          persist-credentials: false
 
       - name: Get the official Nuvio Mobile source
         uses: actions/checkout@v6
@@ -54,7 +56,6 @@ jobs:
           repository: NuvioMedia/NuvioMobile
           ref: ${{ env.NUVIO_MOBILE_COMMIT }}
           path: mobile
-          persist-credentials: false
 
       - name: Add Live TV to the Android app
         working-directory: mobile
