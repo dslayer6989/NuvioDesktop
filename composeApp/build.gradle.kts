@@ -594,6 +594,11 @@ val runtimeLocalProperties = Properties().apply {
     }
 }
 
+// Nuvio's public client API, as published at https://nuvio.tv/docs#base-urls.
+// Values in local.properties or the environment still take precedence.
+val nuvioPublicApiUrl = "https://api.nuvio.tv"
+val nuvioPublicPublishableKey = "sb_publishable_1Clq8rlTVACkdcZuqr6_AD__xUUC_EN"
+
 fun runtimeConfigValue(key: String, fallback: String = ""): String =
     runtimeLocalProperties.getProperty(key)?.trim()?.takeIf { it.isNotBlank() }
         ?: providers.environmentVariable(key).orNull?.trim()?.takeIf { it.isNotBlank() }
@@ -613,8 +618,8 @@ val generateRuntimeConfigs = tasks.register<GenerateRuntimeConfigsTask>("generat
     appVersionCode.set(releaseAppVersionCode)
     desktopAppVersionName.set(desktopReleaseVersionName)
     desktopAppVersionCode.set(desktopReleaseVersionCode)
-    supabaseUrl.set(runtimeConfigValue("NUVIO_SUPABASE_URL"))
-    supabaseAnonKey.set(runtimeConfigValue("NUVIO_SUPABASE_ANON_KEY"))
+    supabaseUrl.set(runtimeConfigValue("NUVIO_SUPABASE_URL", nuvioPublicApiUrl))
+    supabaseAnonKey.set(runtimeConfigValue("NUVIO_SUPABASE_ANON_KEY", nuvioPublicPublishableKey))
     supabaseFallbackUrl.set(runtimeConfigValue("NUVIO_SUPABASE_FALLBACK_URL"))
     sentryDsn.set(runtimeConfigValue("SENTRY_DSN"))
     sentryDesktopDsn.set(runtimeConfigValue("SENTRY_DESKTOP_DSN"))

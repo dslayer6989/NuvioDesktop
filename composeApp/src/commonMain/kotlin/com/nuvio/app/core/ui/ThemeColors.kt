@@ -183,6 +183,26 @@ object ThemeColors {
         backgroundCard = Color(0xFF222222),
     )
 
+    /** Near-black with electric cyan and magenta, matching the Live TV guide. */
+    val NeonBroadcast = ThemeColorPalette(
+        secondary = Color(0xFF00E5FF),
+        secondaryVariant = Color(0xFFFF2BD6),
+        accentGradient = listOf(
+            Color(0xFF7C4DFF),
+            Color(0xFF00E5FF),
+            Color(0xFF5CF2FF),
+            Color(0xFFFF2BD6),
+        ),
+        nativeAccentHex = "#00E5FF",
+        onSecondary = Color(0xFF05040A),
+        onSecondaryVariant = Color.White,
+        focusRing = Color(0xFF5CF2FF),
+        focusBackground = Color(0xFF102A3A),
+        background = Color(0xFF07060D),
+        backgroundElevated = Color(0xFF110E1D),
+        backgroundCard = Color(0xFF191430),
+    )
+
     fun getColorPalette(
         theme: AppTheme,
         customColors: CustomThemeColors = CustomThemeColors.Default,
@@ -200,5 +220,6 @@ object ThemeColors {
         AppTheme.AMBER -> Amber
         AppTheme.ROSE -> Rose
         AppTheme.WHITE -> White
+        AppTheme.NEON_BROADCAST -> NeonBroadcast
     }
 }

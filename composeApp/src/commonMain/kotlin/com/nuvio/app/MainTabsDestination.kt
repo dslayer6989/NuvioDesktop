@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -59,6 +60,7 @@ import nuvio.composeapp.generated.resources.compose_nav_library
 import nuvio.composeapp.generated.resources.compose_nav_profile
 import nuvio.composeapp.generated.resources.compose_nav_search
 import nuvio.composeapp.generated.resources.compose_nav_settings
+import nuvio.composeapp.generated.resources.live_tv_nav_label
 import nuvio.composeapp.generated.resources.sidebar_library
 import nuvio.composeapp.generated.resources.sidebar_search
 import org.jetbrains.compose.resources.stringResource
@@ -149,6 +151,12 @@ internal fun MainTabsDestination(
                 label = stringResource(Res.string.compose_nav_home),
             ),
             FloatingNavigationItem(
+                selected = selectedTab == AppScreenTab.LiveTv,
+                onClick = { onTabSelected(AppScreenTab.LiveTv) },
+                icon = Icons.Rounded.LiveTv,
+                label = stringResource(Res.string.live_tv_nav_label),
+            ),
+            FloatingNavigationItem(
                 selected = selectedTab == AppScreenTab.Search,
                 onClick = { onTabSelected(AppScreenTab.Search) },
                 drawable = Res.drawable.sidebar_search,
@@ -193,6 +201,12 @@ internal fun MainTabsDestination(
                             onClick = { onTabSelected(AppScreenTab.Home) },
                             icon = Icons.Filled.Home,
                             contentDescription = stringResource(Res.string.compose_nav_home),
+                        )
+                        NavItem(
+                            selected = selectedTab == AppScreenTab.LiveTv,
+                            onClick = { onTabSelected(AppScreenTab.LiveTv) },
+                            icon = Icons.Rounded.LiveTv,
+                            contentDescription = stringResource(Res.string.live_tv_nav_label),
                         )
                         NavItem(
                             selected = selectedTab == AppScreenTab.Search,

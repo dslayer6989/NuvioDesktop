@@ -35,6 +35,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -74,6 +75,7 @@ import com.nuvio.app.features.home.HomeCatalogSection
 import com.nuvio.app.features.home.HomeScreen
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.library.LibraryItem
+import com.nuvio.app.features.livetv.LiveTvScreen
 import com.nuvio.app.features.library.LibraryScreen
 import com.nuvio.app.features.library.LibrarySection
 import com.nuvio.app.features.library.LibrarySortOption
@@ -108,6 +110,7 @@ import nuvio.composeapp.generated.resources.compose_nav_profile
 import nuvio.composeapp.generated.resources.compose_nav_search
 import nuvio.composeapp.generated.resources.compose_nav_settings
 import nuvio.composeapp.generated.resources.compose_settings_page_root
+import nuvio.composeapp.generated.resources.live_tv_nav_label
 import nuvio.composeapp.generated.resources.sidebar_library
 import nuvio.composeapp.generated.resources.sidebar_search
 import org.jetbrains.compose.resources.painterResource
@@ -250,6 +253,13 @@ internal fun AppTabHost(
                         onFirstCatalogRendered = actions.onInitialHomeContentRendered,
                     )
                 }
+            }
+
+            AppScreenTab.LiveTv -> {
+                LiveTvScreen(
+                    modifier = Modifier.fillMaxSize(),
+                    topChromePadding = state.topChromePadding,
+                )
             }
 
             AppScreenTab.Search -> {
@@ -519,6 +529,28 @@ internal fun TabletFloatingTopBar(
                                 contentDescription = stringResource(Res.string.compose_nav_home),
                                 modifier = Modifier.size(navIconSize),
                                 tint = if (selectedTab == AppScreenTab.Home) {
+                                    tokens.colors.textPrimary
+                                } else {
+                                    Color.White.copy(alpha = 0.70f)
+                                },
+                            )
+                        },
+                    )
+                    TabletTopPillItem(
+                        label = stringResource(Res.string.live_tv_nav_label),
+                        selected = selectedTab == AppScreenTab.LiveTv,
+                        onClick = { onTabSelected(AppScreenTab.LiveTv) },
+                        labelFraction = labelFraction,
+                        pillHeight = pillHeight,
+                        expandedHorizontalPadding = expandedHorizontalPadding,
+                        collapsedHorizontalPadding = iconCollapsedPadding,
+                        textStyle = labelTextStyle,
+                        icon = {
+                            Icon(
+                                imageVector = Icons.Rounded.LiveTv,
+                                contentDescription = stringResource(Res.string.live_tv_nav_label),
+                                modifier = Modifier.size(navIconSize),
+                                tint = if (selectedTab == AppScreenTab.LiveTv) {
                                     tokens.colors.textPrimary
                                 } else {
                                     Color.White.copy(alpha = 0.70f)
@@ -825,6 +857,19 @@ internal fun DesktopHoverSidebar(
                     Icon(
                         imageVector = Icons.Filled.Home,
                         contentDescription = stringResource(Res.string.compose_nav_home),
+                        modifier = Modifier.size(DesktopSidebarIconSize),
+                        tint = color,
+                    )
+                }
+                DesktopSidebarItem(
+                    label = stringResource(Res.string.live_tv_nav_label),
+                    selected = selectedTab == AppScreenTab.LiveTv,
+                    expanded = sidebarExpanded,
+                    onClick = { selectTab(AppScreenTab.LiveTv) },
+                ) { color ->
+                    Icon(
+                        imageVector = Icons.Rounded.LiveTv,
+                        contentDescription = stringResource(Res.string.live_tv_nav_label),
                         modifier = Modifier.size(DesktopSidebarIconSize),
                         tint = color,
                     )

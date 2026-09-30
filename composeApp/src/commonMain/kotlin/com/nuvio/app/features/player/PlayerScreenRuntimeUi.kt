@@ -532,6 +532,9 @@ internal fun PlayerScreenRuntime.RenderPlayerRuntimeUi() {
                     }
                 },
                 onError = { message ->
+                    if (message != null && tryLiveTvFailover()) {
+                        return@PlatformPlayerSurface
+                    }
                     if (message != null && tryRefreshCredentialedSourceAfterError(message)) {
                         return@PlatformPlayerSurface
                     }

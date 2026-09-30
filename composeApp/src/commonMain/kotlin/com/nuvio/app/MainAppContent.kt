@@ -1,5 +1,14 @@
 package com.nuvio.app
 
+import com.nuvio.app.features.livetv.LiveTvContentType
+import com.nuvio.app.features.livetv.LiveTvLauncher
+import com.nuvio.app.features.livetv.LiveTvPlayerSession
+import com.nuvio.app.features.livetv.LiveTvScreenEvents
+import com.nuvio.app.features.livetv.LiveTvTuneOutcome
+import com.nuvio.app.features.livetv.LiveTvTuneResult
+import com.nuvio.app.features.livetv.LiveTvTuner
+import com.nuvio.app.features.player.sanitizePlaybackHeaders
+import com.nuvio.app.features.player.sanitizePlaybackResponseHeaders
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.core.MutableTransitionState
@@ -409,6 +418,7 @@ internal fun MainAppContent(
 
         when (tab) {
             AppScreenTab.Home -> homeScrollToTopRequests.tryEmit(Unit)
+            AppScreenTab.LiveTv -> LiveTvScreenEvents.requestJumpToNow()
             AppScreenTab.Search -> {
                 searchFocusRequestCount++
                 searchScrollToTopRequests.tryEmit(Unit)
@@ -874,6 +884,61 @@ internal fun MainAppContent(
             }
             val launchId = PlayerLaunchStore.put(playerLaunch)
             navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
+        }
+
+        fun launchLiveTvChannel(result: LiveTvTuneResult) {
+            val stream = result.streams.firstOrNull() ?: return
+            val sourceUrl = stream.playableDirectUrl ?: return
+            LiveTvPlayerSession.start(result)
+            val program = result.program
+            val playerLaunch = PlayerLaunch(
+                profileId = activePlaybackProfileId,
+                title = result.channel.name,
+                sourceUrl = sourceUrl,
+                sourceHeaders = sanitizePlaybackHeaders(stream.behaviorHints.proxyHeaders?.request),
+                sourceResponseHeaders = sanitizePlaybackResponseHeaders(stream.behaviorHints.proxyHeaders?.response),
+                streamType = stream.streamType,
+                logo = result.channel.logo,
+                poster = result.channel.logo,
+                background = program?.thumbnail,
+                episodeTitle = program?.title,
+                episodeThumbnail = program?.thumbnail,
+                streamTitle = stream.streamLabel,
+                streamSubtitle = stream.streamSubtitle,
+                pauseDescription = program?.description,
+                providerName = stream.addonName,
+                providerAddonId = stream.addonId,
+                contentType = LiveTvContentType,
+                videoId = result.channel.id,
+                parentMetaId = result.channel.id,
+                parentMetaType = LiveTvContentType,
+            )
+            if (externalPlayerSupported && playerSettingsUiState.externalPlayerEnabled) {
+                coroutineScope.launch { openExternalPlayback(playerLaunch) }
+                return
+            }
+            val launchId = PlayerLaunchStore.put(playerLaunch)
+            navController.navigate(PlayerRoute(launchId = launchId, title = playerLaunch.title))
+        }
+
+        LaunchedEffect(Unit) {
+            if (!ownsAppRuntime) return@LaunchedEffect
+            LiveTvScreenEvents.openTab.collect { activateTab(AppScreenTab.LiveTv) }
+        }
+
+        LaunchedEffect(navController) {
+            if (!ownsAppRuntime) return@LaunchedEffect
+            LiveTvLauncher.requests.collectLatest { request ->
+                LiveTvLauncher.setTuning(request.channelId)
+                try {
+                    when (val outcome = LiveTvTuner.tune(request)) {
+                        is LiveTvTuneOutcome.Ready -> launchLiveTvChannel(outcome.result)
+                        is LiveTvTuneOutcome.Failed -> NuvioToastController.show(outcome.message, durationMillis = 3500L)
+                    }
+                } finally {
+                    LiveTvLauncher.setTuning(null)
+                }
+            }
         }
 
         fun openExternalStreamUrl(url: String): Boolean {

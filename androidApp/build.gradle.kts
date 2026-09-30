@@ -66,7 +66,10 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.nuvio.app"
+        // Custom builds can install next to the official app with -Pnuvio.android.applicationId=...
+        applicationId = providers.gradleProperty("nuvio.android.applicationId").orNull
+            ?.takeIf { it.isNotBlank() }
+            ?: "com.nuvio.app"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = releaseAppVersionCode

@@ -68,7 +68,10 @@ internal class PlayerScreenRuntime(
 ) {
     var args by mutableStateOf(args)
 
-    val title: String get() = args.title
+    /** Live TV swaps channels inside one player session, so the displayed title/logo can change. */
+    var liveTitleOverride by mutableStateOf<String?>(null)
+    var liveLogoOverride by mutableStateOf<String?>(null)
+    val title: String get() = liveTitleOverride ?: args.title
     val profileId: Int get() = args.profileId
     val sourceUrl: String get() = args.sourceUrl
     val sourceAudioUrl: String? get() = args.sourceAudioUrl
@@ -80,7 +83,7 @@ internal class PlayerScreenRuntime(
     val streamSubtitle: String? get() = args.streamSubtitle
     val initialBingeGroup: String? get() = args.initialBingeGroup
     val pauseDescription: String? get() = args.pauseDescription
-    val logo: String? get() = args.logo
+    val logo: String? get() = liveLogoOverride ?: args.logo
     val poster: String? get() = args.poster
     val background: String? get() = args.background
     val seasonNumber: Int? get() = args.seasonNumber

@@ -1,5 +1,6 @@
 package com.nuvio.app.features.player
 
+import com.nuvio.app.features.livetv.isLiveTvContentType
 import com.nuvio.app.features.tmdb.TmdbService
 import com.nuvio.app.features.tracking.TrackingMediaReference
 import com.nuvio.app.features.tracking.TrackingScrobbleAction
@@ -185,9 +186,10 @@ internal fun PlayerScreenRuntime.snapshotTrackingScrobbleItemInputs() = Tracking
 private fun TrackingScrobbleItemInputs.buildMedia(): TrackingMediaReference =
     buildTrackingMediaReference(
         contentType = contentType,
-        parentMetaId = parentMetaId,
-        videoId = videoId,
-        title = title,
+        // Live TV has no Trakt/Simkl identity; blank ids and title make the scrobbler skip it.
+        parentMetaId = if (contentType.isLiveTvContentType()) "" else parentMetaId,
+        videoId = if (contentType.isLiveTvContentType()) null else videoId,
+        title = if (contentType.isLiveTvContentType()) null else title,
         seasonNumber = seasonNumber,
         episodeNumber = episodeNumber,
         episodeTitle = episodeTitle,

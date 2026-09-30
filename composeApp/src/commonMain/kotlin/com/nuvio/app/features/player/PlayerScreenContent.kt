@@ -175,5 +175,6 @@ internal fun PlayerScreenContent(args: PlayerScreenArgs) {
         )
         runtime.BindPlayerRuntimeEffects()
         runtime.RenderPlayerRuntimeUi()
+        runtime.LiveTvPlayerOverlay()
     }
 }
