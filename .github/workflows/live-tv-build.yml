@@ -1,9 +1,9 @@
 name: Build Nuvio Live TV
 
 # Builds two apps and publishes them together as a GitHub Release:
-#   - Windows installer: this repository (Nuvio Desktop + Live TV)
+#   - Windows installer: the official Nuvio Desktop source + windows-live-tv.patch from this repository
 #   - Android APKs: the official Nuvio Mobile source + android-live-tv.patch from this repository
-# The Android app has its own source code (github.com/NuvioMedia/NuvioMobile), so it is built from there.
+# To update the apps, replace the two .patch files; the other files in this repository aren't used.
 
 on:
   workflow_dispatch:
@@ -25,6 +25,8 @@ concurrency:
 env:
   # Newest Gradle release (see gradle.org/releases). Set to "" to use the version the source code pins.
   LATEST_GRADLE: "9.8.0"
+  # The exact Nuvio Desktop source that windows-live-tv.patch was made for.
+  NUVIO_DESKTOP_COMMIT: b1e00724c55e65f8f325d4d9d52eb6827872a7c2
   # The exact Nuvio Mobile source that android-live-tv.patch was made for (branch cmp-rewrite).
   NUVIO_MOBILE_COMMIT: c1065d0a2a717d7dba445257f064f3fb8d1b30a3
   # Nuvio's public account server, from nuvio.tv/docs#base-urls. Lets you sign in with your Nuvio account.
@@ -65,8 +67,7 @@ jobs:
             echo "::error::android-live-tv.patch was not found. Upload it to the top level of your repository (next to README.md), then run this build again."
             exit 1
           fi
-          sed -i 's/\r$//' "${patch_file}"
-          git apply --whitespace=nowarn "${patch_file}"
+          git apply --whitespace=nowarn "${patch_file}" || git apply --ignore-whitespace --whitespace=nowarn "${patch_file}"
           echo "Live TV added: $(git status --short | wc -l) files changed."
 
       - name: Use the latest Gradle
@@ -152,25 +153,49 @@ jobs:
     env:
       WEBVIEW2_VERSION: 1.0.4078.44
     steps:
-      - name: Check out source
-        uses: actions/checkout@v6
-
-      - name: Fetch Windows player runtime
+      - name: Keep line endings as they are
         shell: bash
+        run: git config --global core.autocrlf false
+
+      - name: Get the Live TV patch from this repository
+        uses: actions/checkout@v6
+        with:
+          path: fork
+          sparse-checkout: |
+            windows-live-tv.patch
+          sparse-checkout-cone-mode: false
+
+      - name: Get the official Nuvio Desktop source
+        uses: actions/checkout@v6
+        with:
+          repository: NuvioMedia/NuvioDesktop
+          ref: ${{ env.NUVIO_DESKTOP_COMMIT }}
+          path: desktop
+          lfs: true
+
+      - name: Add Live TV to the Windows app
+        shell: bash
+        working-directory: desktop
         run: |
-          # Forks don't copy Git LFS files; read them from the official repository.
-          git config lfs.url https://github.com/NuvioMedia/NuvioDesktop.git/info/lfs
-          git lfs pull --include="composeApp/src/desktopMain/native/windows/runtime/**,composeApp/src/desktopMain/resources/torrserver/windows-amd64/TorrServer.exe" --exclude=""
+          patch_file="${GITHUB_WORKSPACE}/fork/windows-live-tv.patch"
+          if [[ ! -f "${patch_file}" ]]; then
+            echo "::error::windows-live-tv.patch was not found. Upload it to the top level of your repository (next to README.md), then run this build again."
+            exit 1
+          fi
+          git apply --whitespace=nowarn "${patch_file}" || git apply --ignore-whitespace --whitespace=nowarn "${patch_file}"
+          echo "Live TV added: $(git status --short | wc -l) files changed."
 
       - name: Use the latest Gradle
         if: ${{ env.LATEST_GRADLE != '' }}
         shell: bash
+        working-directory: desktop
         run: |
           sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${LATEST_GRADLE}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
           grep distributionUrl gradle/wrapper/gradle-wrapper.properties
 
       - name: Prepare sign-in settings
         shell: bash
+        working-directory: desktop
         run: |
           {
             echo "NUVIO_SUPABASE_URL=${NUVIO_API_URL}"
@@ -194,6 +219,7 @@ jobs:
 
       - name: Build MSI
         shell: pwsh
+        working-directory: desktop
         run: |
           # Every build gets a higher version number, so a new installer cleanly replaces the previous one
           # (and the regular Nuvio desktop app, which it includes).
@@ -219,7 +245,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p out
-          cp composeApp/build/compose/release-msis/*.msi out/Nuvio-LiveTV-Windows.msi
+          cp desktop/composeApp/build/compose/release-msis/*.msi out/Nuvio-LiveTV-Windows.msi
           ls -la out
 
       - name: Upload installer
