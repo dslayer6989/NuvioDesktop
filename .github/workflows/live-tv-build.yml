@@ -1,7 +1,9 @@
 name: Build Nuvio Live TV
 
-# Builds the Android APKs and the Windows installer for the custom Live TV
-# branch and publishes them as a GitHub Release you can download on any device.
+# Builds two apps and publishes them together as a GitHub Release:
+#   - Windows installer: this repository (Nuvio Desktop + Live TV)
+#   - Android APKs: the official Nuvio Mobile source + android-live-tv.patch from this repository
+# The Android app has its own source code (github.com/NuvioMedia/NuvioMobile), so it is built from there.
 
 on:
   workflow_dispatch:
@@ -20,16 +22,58 @@ concurrency:
   group: live-tv-build
   cancel-in-progress: true
 
+env:
+  # Newest Gradle release (see gradle.org/releases). Set to "" to use the version the source code pins.
+  LATEST_GRADLE: "9.8.0"
+  # The exact Nuvio Mobile source that android-live-tv.patch was made for (branch cmp-rewrite).
+  NUVIO_MOBILE_COMMIT: c1065d0a2a717d7dba445257f064f3fb8d1b30a3
+  # Nuvio's public account server, from nuvio.tv/docs#base-urls. Lets you sign in with your Nuvio account.
+  NUVIO_API_URL: https://api.nuvio.tv
+  NUVIO_API_KEY: sb_publishable_1Clq8rlTVACkdcZuqr6_AD__xUUC_EN
+
 jobs:
   android:
     name: Android APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       KEYSTORE_BASE64: ${{ secrets.LIVE_TV_KEYSTORE_BASE64 }}
       KEYSTORE_PASSWORD: ${{ secrets.LIVE_TV_KEYSTORE_PASSWORD }}
     steps:
-      - name: Check out source
+      - name: Get the Live TV patch from this repository
         uses: actions/checkout@v6
+        with:
+          path: fork
+          sparse-checkout: |
+            android-live-tv.patch
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Get the official Nuvio Mobile source
+        uses: actions/checkout@v6
+        with:
+          repository: NuvioMedia/NuvioMobile
+          ref: ${{ env.NUVIO_MOBILE_COMMIT }}
+          path: mobile
+          persist-credentials: false
+
+      - name: Add Live TV to the Android app
+        working-directory: mobile
+        run: |
+          patch_file="${GITHUB_WORKSPACE}/fork/android-live-tv.patch"
+          if [[ ! -f "${patch_file}" ]]; then
+            echo "::error::android-live-tv.patch was not found. Upload it to the top level of your repository (next to README.md), then run this build again."
+            exit 1
+          fi
+          sed -i 's/\r$//' "${patch_file}"
+          git apply --whitespace=nowarn "${patch_file}"
+          echo "Live TV added: $(git status --short | wc -l) files changed."
+
+      - name: Use the latest Gradle
+        if: ${{ env.LATEST_GRADLE != '' }}
+        working-directory: mobile
+        run: |
+          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${LATEST_GRADLE}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
+          grep distributionUrl gradle/wrapper/gradle-wrapper.properties
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -40,7 +84,8 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Prepare signing key
+      - name: Prepare sign-in settings and signing key
+        working-directory: mobile
         run: |
           keystore="${RUNNER_TEMP}/live-tv.jks"
           if [[ -n "${KEYSTORE_BASE64}" && -n "${KEYSTORE_PASSWORD}" ]]; then
@@ -53,6 +98,8 @@ jobs:
               -alias livetv -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Nuvio Live TV"
           fi
           {
+            echo "NUVIO_SUPABASE_URL=${NUVIO_API_URL}"
+            echo "NUVIO_SUPABASE_ANON_KEY=${NUVIO_API_KEY}"
             echo "NUVIO_RELEASE_STORE_FILE=${keystore}"
             echo "NUVIO_RELEASE_STORE_PASSWORD=${password}"
             echo "NUVIO_RELEASE_KEY_ALIAS=livetv"
@@ -60,12 +107,26 @@ jobs:
           } > local.properties
 
       - name: Build APKs
-        run: ./gradlew :androidApp:assembleFullRelease -Pnuvio.android.applicationId=com.nuvio.app.livetv --stacktrace
+        working-directory: mobile
+        run: |
+          args=(:androidApp:assembleFullRelease -Pnuvio.android.distribution=full -Pnuvio.android.applicationId=com.nuvio.app.livetv --stacktrace)
+          if ./gradlew "${args[@]}"; then
+            exit 0
+          fi
+          if [[ -z "${LATEST_GRADLE}" ]]; then
+            exit 1
+          fi
+          # Safety net: if the newer Gradle is the problem, build once more with the version the source pins.
+          echo "::warning::The build failed with Gradle ${LATEST_GRADLE}; trying again with the Gradle version the source code pins."
+          ./gradlew --stop || true
+          pkill -f KotlinCompileDaemon || true
+          git checkout -- gradle/wrapper/gradle-wrapper.properties
+          ./gradlew "${args[@]}"
 
       - name: Rename APKs
         run: |
           mkdir -p out
-          for apk in androidApp/build/outputs/apk/full/release/*.apk; do
+          for apk in mobile/androidApp/build/outputs/apk/full/release/*.apk; do
             name="$(basename "${apk}")"
             case "${name}" in
               *arm64-v8a*)   cp "${apk}" out/Nuvio-LiveTV-Android-phone.apk ;;
@@ -100,6 +161,21 @@ jobs:
           git config lfs.url https://github.com/NuvioMedia/NuvioDesktop.git/info/lfs
           git lfs pull --include="composeApp/src/desktopMain/native/windows/runtime/**,composeApp/src/desktopMain/resources/torrserver/windows-amd64/TorrServer.exe" --exclude=""
 
+      - name: Use the latest Gradle
+        if: ${{ env.LATEST_GRADLE != '' }}
+        shell: bash
+        run: |
+          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${LATEST_GRADLE}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
+          grep distributionUrl gradle/wrapper/gradle-wrapper.properties
+
+      - name: Prepare sign-in settings
+        shell: bash
+        run: |
+          {
+            echo "NUVIO_SUPABASE_URL=${NUVIO_API_URL}"
+            echo "NUVIO_SUPABASE_ANON_KEY=${NUVIO_API_KEY}"
+          } > local.properties
+
       - name: Set up Java
         uses: actions/setup-java@v5
         with:
@@ -118,10 +194,25 @@ jobs:
       - name: Build MSI
         shell: pwsh
         run: |
-          & .\gradlew.bat :composeApp:packageReleaseMsi `
-            "-Pnuvio.webview2.dir=$env:WEBVIEW2_ROOT" `
-            "-Pcompose.desktop.packaging.checkJdkVendor=false" `
-            --no-configuration-cache --no-daemon --stacktrace
+          # Every build gets a higher version number, so a new installer cleanly replaces the previous one
+          # (and the regular Nuvio desktop app, which it includes).
+          $version = "0.1.$(9000 + [int]$env:GITHUB_RUN_NUMBER)"
+          $gradleArgs = @(
+            ":composeApp:packageReleaseMsi",
+            "-Pnuvio.desktop.versionName=$version",
+            "-Pnuvio.webview2.dir=$env:WEBVIEW2_ROOT",
+            "-Pcompose.desktop.packaging.checkJdkVendor=false",
+            "--no-configuration-cache", "--no-daemon", "--stacktrace"
+          )
+          & .\gradlew.bat @gradleArgs
+          if ($LASTEXITCODE -ne 0 -and $env:LATEST_GRADLE) {
+            # Safety net: if the newer Gradle is the problem, build once more with the version the source pins.
+            Write-Output "::warning::The build failed with Gradle $env:LATEST_GRADLE; trying again with the Gradle version the source code pins."
+            Get-Process -Name java -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            git checkout -- gradle/wrapper/gradle-wrapper.properties
+            & .\gradlew.bat @gradleArgs
+          }
+          exit $LASTEXITCODE
 
       - name: Collect installer
         shell: bash
@@ -141,7 +232,7 @@ jobs:
     name: Publish release
     needs: [android, windows]
     if: ${{ !cancelled() && (needs.android.result == 'success' || needs.windows.result == 'success') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Download builds
         uses: actions/download-artifact@v8
@@ -160,6 +251,7 @@ jobs:
           It installs next to the official Nuvio app as **Nuvio Live TV**.
 
           **Windows:** download `Nuvio-LiveTV-Windows.msi` and double-click it.
+          It replaces the regular Nuvio desktop app and keeps your settings. If Nuvio later offers an app update, skip it: that update doesn't include Live TV.
 
           Sign in with your Nuvio account, then open the **Live TV** tab and paste your addon's manifest link.
           NOTES
