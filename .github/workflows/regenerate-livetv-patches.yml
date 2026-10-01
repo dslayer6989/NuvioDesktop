@@ -1,0 +1,494 @@
+name: Regenerate Live TV patches
+
+# Run by hand (Actions tab > Regenerate Live TV patches > Run workflow).
+# Adds backlog items 1, 6 and 7 on top of the current patches, runs the Live TV tests
+# on the desktop code, and produces new .patch files as a download. It never pushes anything.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regenerate-livetv-patches
+  cancel-in-progress: false
+
+env:
+  NUVIO_DESKTOP_COMMIT: b1e00724c55e65f8f325d4d9d52eb6827872a7c2
+  NUVIO_MOBILE_COMMIT: c1065d0a2a717d7dba445257f064f3fb8d1b30a3
+  NUVIO_API_URL: https://api.nuvio.tv
+  NUVIO_API_KEY: sb_publishable_1Clq8rlTVACkdcZuqr6_AD__xUUC_EN
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-24.04
+    steps:
+      # Leave persist-credentials at its default (Nuvio's repos have the libass-android gitlink).
+      - name: Get the current patches from this repository
+        uses: actions/checkout@v6
+        with:
+          path: fork
+          sparse-checkout: |
+            windows-live-tv.patch
+            android-live-tv.patch
+          sparse-checkout-cone-mode: false
+
+      - name: Get the official Nuvio Desktop source
+        uses: actions/checkout@v6
+        with:
+          repository: NuvioMedia/NuvioDesktop
+          ref: ${{ env.NUVIO_DESKTOP_COMMIT }}
+          path: desktop
+          lfs: true
+
+      - name: Get the official Nuvio Mobile source
+        uses: actions/checkout@v6
+        with:
+          repository: NuvioMedia/NuvioMobile
+          ref: ${{ env.NUVIO_MOBILE_COMMIT }}
+          path: mobile
+
+      - name: Write the edit script and the new test file
+        run: |
+          cat > "${RUNNER_TEMP}/edit_livetv.py" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+          features = root / "composeApp/src/commonMain/kotlin/com/nuvio/app/features"
+          repo_file = features / "livetv/LiveTvRepository.kt"
+          search_file = features / "settings/SettingsSearch.kt"
+          strings_file = root / "composeApp/src/commonMain/composeResources/values/strings_live_tv.xml"
+
+
+          def fail(message):
+              sys.exit("ERROR: " + message)
+
+
+          def read(path):
+              if not path.exists():
+                  fail(path.as_posix() + " does not exist")
+              raw = path.read_bytes().decode("utf-8")
+              return raw.replace("\r\n", "\n"), "\r\n" in raw
+
+
+          def write(path, text, crlf):
+              if crlf:
+                  text = text.replace("\n", "\r\n")
+              path.write_bytes(text.encode("utf-8"))
+
+
+          def replace_once(text, old, new, what):
+              count = text.count(old)
+              if count != 1:
+                  fail("expected one match for " + what + " but found " + str(count))
+              return text.replace(old, new)
+
+
+          # ---------------------------------------------------------------- items 1 and 7: repository
+          OLD_LOAD_IDS = """    private fun loadProfileIds(key: String, profileId: Int): List<String> =
+              (LiveTvStorage.loadString(ProfileScopedKey.of(key, profileId)) ?: LiveTvStorage.loadString(key))
+                  ?.let { payload -> runCatching { json.decodeFromString(idListSerializer, payload) }.getOrNull() }
+                  .orEmpty()
+          """
+          NEW_LOAD_IDS = """    private fun loadProfileIds(key: String, profileId: Int): List<String> =
+              decodeProfileIds(
+                  scoped = LiveTvStorage.loadString(ProfileScopedKey.of(key, profileId)),
+                  legacy = LiveTvStorage.loadString(key),
+              )
+          """
+          OLD_LOAD_STRING = """    private fun loadProfileString(key: String, profileId: Int): String? =
+              LiveTvStorage.loadString(ProfileScopedKey.of(key, profileId)) ?: LiveTvStorage.loadString(key)
+          """
+          NEW_LOAD_STRING = """    private fun loadProfileString(key: String, profileId: Int): String? =
+              resolveProfileValue(
+                  scoped = LiveTvStorage.loadString(ProfileScopedKey.of(key, profileId)),
+                  legacy = LiveTvStorage.loadString(key),
+              )
+          """
+          OLD_CLEAR_FAVORITES = """        _uiState.update {
+                  it.copy(
+                      favoriteIds = emptyList(),
+                      selectedGroupId = it.selectedGroupId.takeUnless { id -> id == LiveTvFavoritesGroupId },
+                  )
+              }
+          """
+          NEW_CLEAR_FAVORITES = """        _uiState.update { it.withoutFavorites() }
+          """
+          OLD_CLEAR_RECENTS = """        _uiState.update {
+                  it.copy(
+                      recentIds = emptyList(),
+                      selectedGroupId = it.selectedGroupId.takeUnless { id -> id == LiveTvRecentGroupId },
+                  )
+              }
+          """
+          NEW_CLEAR_RECENTS = """        _uiState.update { it.withoutRecents() }
+          """
+          HELPERS = """private val LiveTvIdListJson = Json { ignoreUnknownKeys = true }
+
+          /**
+           * What a profile should see for a saved value: its own value when it has one, otherwise the
+           * device-wide value older builds saved. An empty string means "All channels" and reads as null,
+           * even when an older device-wide value exists.
+           */
+          internal fun resolveProfileValue(scoped: String?, legacy: String?): String? =
+              (scoped ?: legacy)?.ifEmpty { null }
+
+          /** A profile's saved channel list. A list the profile emptied itself does not fall back to the old one. */
+          internal fun decodeProfileIds(scoped: String?, legacy: String?): List<String> =
+              resolveProfileValue(scoped, legacy)
+                  ?.let { payload ->
+                      runCatching {
+                          LiveTvIdListJson.decodeFromString(ListSerializer(String.serializer()), payload)
+                      }.getOrNull()
+                  }
+                  .orEmpty()
+
+          /** This state with the favorites emptied and, if the Favorites chip was selected, back on All. */
+          internal fun LiveTvUiState.withoutFavorites(): LiveTvUiState = copy(
+              favoriteIds = emptyList(),
+              selectedGroupId = selectedGroupId.takeUnless { it == LiveTvFavoritesGroupId },
+          )
+
+          /** This state with the recents emptied and, if the Recent chip was selected, back on All. */
+          internal fun LiveTvUiState.withoutRecents(): LiveTvUiState = copy(
+              recentIds = emptyList(),
+              selectedGroupId = selectedGroupId.takeUnless { it == LiveTvRecentGroupId },
+          )
+
+          """
+
+          text, crlf = read(repo_file)
+          if "resolveProfileValue" in text:
+              print("Repository edits already applied: " + repo_file.name)
+          else:
+              text = replace_once(text, OLD_LOAD_IDS, NEW_LOAD_IDS, "loadProfileIds")
+              text = replace_once(text, OLD_LOAD_STRING, NEW_LOAD_STRING, "loadProfileString")
+              text = replace_once(text, OLD_CLEAR_FAVORITES, NEW_CLEAR_FAVORITES, "clearFavorites update block")
+              text = replace_once(text, OLD_CLEAR_RECENTS, NEW_CLEAR_RECENTS, "clearRecents update block")
+              text = replace_once(text, "object LiveTvRepository {\n", HELPERS + "object LiveTvRepository {\n", "object LiveTvRepository")
+              write(repo_file, text, crlf)
+              print("Edited " + repo_file.name)
+
+          # ---------------------------------------------------------------- item 6: settings search
+          text, crlf = read(search_file)
+          if 'key = "live-tv"' in text:
+              print("Settings search entry already present: " + search_file.name)
+          else:
+              xml = strings_file.read_text(encoding="utf-8")
+              strings = dict(re.findall(r'<string name="([^"]+)"[^>]*>(.*?)</string>', xml, re.S))
+              for required in ("live_tv_settings_page_title", "live_tv_settings_entry_description"):
+                  if required not in strings:
+                      fail("strings_live_tv.xml has no " + required)
+
+              block = [
+                  "    val liveTvPage = stringResource(Res.string.live_tv_settings_page_title)",
+                  "    addPage(",
+                  "        page = SettingsPage.LiveTv,",
+                  '        key = "live-tv",',
+                  "        title = liveTvPage,",
+                  "        description = stringResource(Res.string.live_tv_settings_entry_description),",
+                  "        icon = Icons.Rounded.LiveTv,",
+                  "    )",
+              ]
+              rows = [
+                  ("live-tv-refresh", "live_tv_settings_refresh", "live_tv_settings_section_addon"),
+                  ("live-tv-remove", "live_tv_settings_remove", "live_tv_settings_section_addon"),
+                  ("live-tv-clear-favorites", "live_tv_settings_clear_favorites", "live_tv_settings_section_lists"),
+                  ("live-tv-clear-recents", "live_tv_settings_clear_recents", "live_tv_settings_section_lists"),
+              ]
+              for key, title_key, section_key in rows:
+                  if title_key not in strings or section_key not in strings or "%" in strings[title_key]:
+                      print("Skipping search row " + key + " (string missing or has a placeholder)")
+                      continue
+                  block += [
+                      "    addRow(",
+                      "        page = SettingsPage.LiveTv,",
+                      '        key = "' + key + '",',
+                      "        title = stringResource(Res.string." + title_key + "),",
+                      "        pageLabel = liveTvPage,",
+                      "        section = stringResource(Res.string." + section_key + "),",
+                      "        icon = Icons.Rounded.LiveTv,",
+                      "    )",
+                  ]
+              inserted = "\n".join(block) + "\n\n"
+
+              match = re.search(r"^[ \t]*addPage\(\s*page = SettingsPage\.Homescreen,", text, re.M)
+              if match is None:
+                  match = re.search(r"^    return entries$", text, re.M)
+              if match is None:
+                  fail("no place found to add the Live TV entries in " + search_file.name)
+              text = text[:match.start()] + inserted + text[match.start():]
+
+              icon_import = "import androidx.compose.material.icons.rounded.LiveTv\n"
+              if icon_import not in text:
+                  for anchor in (
+                      "import androidx.compose.material.icons.rounded.Language\n",
+                      "import androidx.compose.material.icons.Icons\n",
+                  ):
+                      if anchor in text:
+                          text = text.replace(anchor, anchor + icon_import, 1)
+                          break
+                  else:
+                      fail("no import anchor found in " + search_file.name)
+              write(search_file, text, crlf)
+              print("Edited " + search_file.name)
+          PY
+
+          cat > "${RUNNER_TEMP}/LiveTvStateTest.kt" <<'KT'
+          package com.nuvio.app.features.livetv
+
+          import com.nuvio.app.features.streams.StreamItem
+          import kotlin.test.Test
+          import kotlin.test.assertEquals
+          import kotlin.test.assertNotNull
+          import kotlin.test.assertNull
+          import kotlin.test.assertSame
+          import kotlin.test.assertTrue
+
+          private fun liveStream(
+              name: String?,
+              url: String?,
+              title: String? = null,
+              description: String? = null,
+          ) = StreamItem(
+              name = name,
+              title = title,
+              description = description,
+              url = url,
+              addonName = "Test addon",
+              addonId = "addon:test",
+          )
+
+          /** The remembered working source goes first; everything else keeps the addon's order. */
+          class LiveTvStreamPreferenceTest {
+              private val a = liveStream("Primary", "https://cdn.example/a.m3u8")
+              private val b = liveStream("Backup 1", "https://cdn.example/b.m3u8")
+              private val c = liveStream("Backup 2", "https://cdn.example/c.m3u8")
+              private val lineup = listOf(a, b, c)
+
+              @Test
+              fun remembersTheSourceByLink() {
+                  val saved = LiveTvWorkingStream(url = "https://cdn.example/c.m3u8", label = null, savedAtMs = 1L)
+                  assertEquals(listOf(c, a, b), orderStreamsByPreference(lineup, saved))
+              }
+
+              @Test
+              fun fallsBackToTheLabelWhenTheLinkChanged() {
+                  val saved = assertNotNull(
+                      LiveTvWorkingStream.of(liveStream("Backup 1", "https://cdn.example/b.m3u8?token=old"), nowMs = 1L),
+                  )
+                  val fresh = listOf(a, liveStream("Backup 1", "https://cdn.example/b.m3u8?token=new"), c)
+                  assertEquals(listOf(fresh[1], fresh[0], fresh[2]), orderStreamsByPreference(fresh, saved))
+              }
+
+              @Test
+              fun aLinkMatchBeatsALabelMatch() {
+                  val first = liveStream("HD", "https://cdn.example/one.m3u8")
+                  val second = liveStream("HD", "https://cdn.example/two.m3u8")
+                  val saved = LiveTvWorkingStream(url = "https://cdn.example/two.m3u8", label = "HD", savedAtMs = 1L)
+                  assertEquals(listOf(second, first), orderStreamsByPreference(listOf(first, second), saved))
+              }
+
+              @Test
+              fun keepsTheRestInAddonOrder() {
+                  val d = liveStream("Backup 3", "https://cdn.example/d.m3u8")
+                  val ordered = orderStreamsByPreference(listOf(a, b, c, d), LiveTvWorkingStream.of(c, nowMs = 1L))
+                  assertEquals(listOf(c, a, b, d), ordered)
+              }
+
+              @Test
+              fun leavesTheOrderAloneWhenThereIsNothingToPrefer() {
+                  assertSame(lineup, orderStreamsByPreference(lineup, null))
+
+                  val gone = LiveTvWorkingStream(url = "https://cdn.example/gone.m3u8", label = "Gone", savedAtMs = 1L)
+                  assertSame(lineup, orderStreamsByPreference(lineup, gone))
+
+                  assertSame(lineup, orderStreamsByPreference(lineup, LiveTvWorkingStream.of(a, nowMs = 1L)))
+
+                  val single = listOf(a)
+                  assertSame(single, orderStreamsByPreference(single, LiveTvWorkingStream.of(a, nowMs = 1L)))
+              }
+
+              @Test
+              fun theLabelJoinsNameTitleAndDescription() {
+                  val stream = liveStream("HD", "https://cdn.example/x.m3u8", title = "Feed", description = "Eastern")
+                  assertEquals("HD|Feed|Eastern", LiveTvWorkingStream.of(stream, nowMs = 1L)?.label)
+              }
+
+              @Test
+              fun cannotRememberAStreamWithoutALinkOrLabel() {
+                  assertNull(LiveTvWorkingStream.of(liveStream(name = null, url = null), nowMs = 1L))
+              }
+
+              @Test
+              fun sameSourceComparesLinkAndLabelOnly() {
+                  val one = LiveTvWorkingStream(url = "u", label = "l", savedAtMs = 1L)
+                  assertTrue(one.sameSourceAs(LiveTvWorkingStream(url = "u", label = "l", savedAtMs = 99L)))
+                  assertTrue(!one.sameSourceAs(LiveTvWorkingStream(url = "u2", label = "l", savedAtMs = 1L)))
+              }
+          }
+
+          /** Per-profile favorites, recents and chip: loading, the old device-wide fallback, and clearing. */
+          class LiveTvProfileDataTest {
+              private val loaded = LiveTvUiState(
+                  favoriteIds = listOf("a", "b"),
+                  recentIds = listOf("c", "d"),
+              )
+
+              @Test
+              fun aProfilesOwnValueWinsOverTheOldDeviceWideOne() {
+                  assertEquals("sports", resolveProfileValue("sports", "news"))
+              }
+
+              @Test
+              fun theOldDeviceWideValueIsTheStartingPoint() {
+                  assertEquals("news", resolveProfileValue(null, "news"))
+              }
+
+              @Test
+              fun anEmptyProfileValueMeansAllChannels() {
+                  assertNull(resolveProfileValue("", null))
+                  assertNull(resolveProfileValue("", "news"))
+              }
+
+              @Test
+              fun anEmptyOldValueAlsoMeansAllChannels() {
+                  assertNull(resolveProfileValue(null, ""))
+              }
+
+              @Test
+              fun nothingSavedMeansNothingSelected() {
+                  assertNull(resolveProfileValue(null, null))
+              }
+
+              @Test
+              fun channelListsUseTheProfilesOwnList() {
+                  assertEquals(listOf("a"), decodeProfileIds("[\"a\"]", "[\"b\"]"))
+              }
+
+              @Test
+              fun channelListsStartFromTheOldDeviceWideList() {
+                  assertEquals(listOf("b", "c"), decodeProfileIds(null, "[\"b\",\"c\"]"))
+              }
+
+              @Test
+              fun aListTheProfileEmptiedDoesNotComeBack() {
+                  assertEquals(emptyList<String>(), decodeProfileIds("[]", "[\"b\"]"))
+              }
+
+              @Test
+              fun unreadableOrMissingListsReadAsEmpty() {
+                  assertEquals(emptyList<String>(), decodeProfileIds("not json", null))
+                  assertEquals(emptyList<String>(), decodeProfileIds(null, null))
+              }
+
+              @Test
+              fun clearingFavoritesLeavesTheFavoritesChip() {
+                  val cleared = loaded.copy(selectedGroupId = LiveTvFavoritesGroupId).withoutFavorites()
+                  assertEquals(emptyList<String>(), cleared.favoriteIds)
+                  assertNull(cleared.selectedGroupId)
+                  assertEquals(listOf("c", "d"), cleared.recentIds)
+              }
+
+              @Test
+              fun clearingFavoritesKeepsAnyOtherChip() {
+                  for (chip in listOf("sports", LiveTvRecentGroupId)) {
+                      assertEquals(chip, loaded.copy(selectedGroupId = chip).withoutFavorites().selectedGroupId)
+                  }
+                  assertNull(loaded.withoutFavorites().selectedGroupId)
+              }
+
+              @Test
+              fun clearingRecentsLeavesTheRecentChip() {
+                  val cleared = loaded.copy(selectedGroupId = LiveTvRecentGroupId).withoutRecents()
+                  assertEquals(emptyList<String>(), cleared.recentIds)
+                  assertNull(cleared.selectedGroupId)
+                  assertEquals(listOf("a", "b"), cleared.favoriteIds)
+              }
+
+              @Test
+              fun clearingRecentsKeepsAnyOtherChip() {
+                  for (chip in listOf("sports", LiveTvFavoritesGroupId)) {
+                      assertEquals(chip, loaded.copy(selectedGroupId = chip).withoutRecents().selectedGroupId)
+                  }
+                  assertNull(loaded.withoutRecents().selectedGroupId)
+              }
+          }
+          KT
+
+      - name: Rebuild the patches
+        env:
+          GIT_LFS_SKIP_SMUDGE: "1"
+        run: |
+          set -euo pipefail
+          git config --global user.name "ci"
+          git config --global user.email "ci@users.noreply.github.com"
+          git config --global core.autocrlf false
+          mkdir -p "${GITHUB_WORKSPACE}/out"
+          edit="${RUNNER_TEMP}/edit_livetv.py"
+          test_src="${RUNNER_TEMP}/LiveTvStateTest.kt"
+          test_rel="composeApp/src/commonTest/kotlin/com/nuvio/app/features/livetv/LiveTvStateTest.kt"
+          repo_rel="composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvRepository.kt"
+          search_rel="composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsSearch.kt"
+
+          # regen <repo dir> <base commit> <input patch> <output patch> <pathspec>
+          regen() {
+            local repo="$1" base="$2" in="$3" out="$4" spec="$5"
+            echo "::group::${out##*/}"
+            cd "${GITHUB_WORKSPACE}/${repo}"
+            git reset --hard -q "${base}"
+            git clean -fdq
+            git apply --whitespace=nowarn "${in}" || git apply --ignore-whitespace --whitespace=nowarn "${in}"
+            git add -A
+            git commit -q -m "Current patch"
+            python3 "${edit}" "${PWD}"
+            mkdir -p "$(dirname "${test_rel}")"
+            cp "${test_src}" "${test_rel}"
+            git add -A
+            git commit -q -m "Live TV: chip fix, settings search, tests"
+            git show --stat --format= HEAD
+            git show --format= HEAD -- "${repo_rel}" "${search_rel}"
+            git diff --binary "${base}" HEAD -- ${spec} > "${out}"
+            # Prove the new patch applies to a pristine copy of the base.
+            local verify="${RUNNER_TEMP}/verify-${repo}"
+            git worktree add --detach -q "${verify}" "${base}"
+            (cd "${verify}" && git apply --check "${out}")
+            git worktree remove --force "${verify}"
+            echo "OK: ${out##*/} applies cleanly to ${base:0:7}"
+            echo "::endgroup::"
+          }
+
+          regen desktop "${NUVIO_DESKTOP_COMMIT}" "${GITHUB_WORKSPACE}/fork/windows-live-tv.patch" \
+            "${GITHUB_WORKSPACE}/out/windows-live-tv.patch" "composeApp"
+          regen mobile "${NUVIO_MOBILE_COMMIT}" "${GITHUB_WORKSPACE}/fork/android-live-tv.patch" \
+            "${GITHUB_WORKSPACE}/out/android-live-tv.patch" "."
+          ls -la "${GITHUB_WORKSPACE}/out"
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run the Live TV tests (desktop)
+        working-directory: desktop
+        run: |
+          {
+            echo "NUVIO_SUPABASE_URL=${NUVIO_API_URL}"
+            echo "NUVIO_SUPABASE_ANON_KEY=${NUVIO_API_KEY}"
+          } > local.properties
+          ./gradlew :composeApp:desktopTest --tests "com.nuvio.app.features.livetv.*" --no-daemon --stacktrace
+
+      - name: Upload the new patches
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: livetv-patches
+          path: out/*.patch
+          if-no-files-found: warn
