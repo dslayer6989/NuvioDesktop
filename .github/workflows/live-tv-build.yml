@@ -14,6 +14,9 @@ on:
       - custom/live-tv-neon
     paths-ignore:
       - "**.md"
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
