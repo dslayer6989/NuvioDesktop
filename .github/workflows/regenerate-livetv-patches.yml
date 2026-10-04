@@ -1,0 +1,186 @@
+name: Regenerate Live TV patches
+
+# Run by hand: Actions tab > Regenerate Live TV patches > Run workflow.
+# Adds backlog items 1, 6 and 7 on top of the current patches, runs the Live TV tests on the
+# desktop code, and offers the new .patch files as a download. It never pushes anything.
+# It reads two helper files from .github/livetv-tools in this repository.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regenerate-livetv-patches
+  cancel-in-progress: false
+
+env:
+  NUVIO_DESKTOP_COMMIT: b1e00724c55e65f8f325d4d9d52eb6827872a7c2
+  NUVIO_MOBILE_COMMIT: c1065d0a2a717d7dba445257f064f3fb8d1b30a3
+  NUVIO_API_URL: https://api.nuvio.tv
+  NUVIO_API_KEY: sb_publishable_1Clq8rlTVACkdcZuqr6_AD__xUUC_EN
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-24.04
+    steps:
+      # Leave persist-credentials at its default (Nuvio's repositories contain the libass-android gitlink).
+      - name: Get the current patches and helper files from this repository
+        uses: actions/checkout@v6
+        with:
+          path: fork
+          sparse-checkout: |
+            windows-live-tv.patch
+            android-live-tv.patch
+            .github/livetv-tools/
+          sparse-checkout-cone-mode: false
+
+      - name: Get the official Nuvio Desktop source
+        uses: actions/checkout@v6
+        with:
+          repository: NuvioMedia/NuvioDesktop
+          ref: ${{ env.NUVIO_DESKTOP_COMMIT }}
+          path: desktop
+          lfs: true
+
+      - name: Get the official Nuvio Mobile source
+        uses: actions/checkout@v6
+        with:
+          repository: NuvioMedia/NuvioMobile
+          ref: ${{ env.NUVIO_MOBILE_COMMIT }}
+          path: mobile
+
+      - name: Rebuild the patches
+        run: |
+          set -euo pipefail
+          git config --global user.name "ci"
+          git config --global user.email "ci@users.noreply.github.com"
+          git config --global core.autocrlf false
+          mkdir -p "${GITHUB_WORKSPACE}/out"
+          tools="${GITHUB_WORKSPACE}/fork/.github/livetv-tools"
+          for f in edit_livetv.py LiveTvStateTest.kt; do
+            if [[ ! -f "${tools}/${f}" ]]; then
+              echo "::error::${f} was not found in .github/livetv-tools of your repository. Add it, then run this again."
+              exit 1
+            fi
+          done
+          python3 -m py_compile "${tools}/edit_livetv.py"
+          edit="${tools}/edit_livetv.py"
+          test_src="${tools}/LiveTvStateTest.kt"
+          test_rel="composeApp/src/commonTest/kotlin/com/nuvio/app/features/livetv/LiveTvStateTest.kt"
+          repo_rel="composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvRepository.kt"
+          search_rel="composeApp/src/commonMain/kotlin/com/nuvio/app/features/settings/SettingsSearch.kt"
+
+          # regen <repo dir> <base commit> <input patch> <output patch> <pathspec>
+          regen() {
+            local repo="$1" base="$2" in="$3" out="$4" spec="$5"
+            echo "::group::${out##*/}"
+            cd "${GITHUB_WORKSPACE}/${repo}"
+            git reset --hard -q "${base}"
+            git clean -fdq
+            git apply --whitespace=nowarn "${in}" || git apply --ignore-whitespace --whitespace=nowarn "${in}"
+            git add -A
+            git commit -q -m "Current patch"
+            python3 "${edit}" "${PWD}"
+            mkdir -p "$(dirname "${test_rel}")"
+            cp "${test_src}" "${test_rel}"
+            git add -A
+            git commit -q -m "Live TV: chip fix, settings search, tests"
+            git show --stat --format= HEAD
+            git show --format= HEAD -- "${repo_rel}" "${search_rel}"
+            git diff --binary "${base}" HEAD -- ${spec} > "${out}"
+            # Prove the new patch applies to a pristine copy of the base.
+            local verify="${RUNNER_TEMP}/verify-${repo}"
+            git worktree add --detach -q "${verify}" "${base}"
+            (cd "${verify}" && git apply --check "${out}")
+            git worktree remove --force "${verify}"
+            echo "OK: ${out##*/} applies cleanly to ${base:0:7}"
+            echo "::endgroup::"
+          }
+
+          regen desktop "${NUVIO_DESKTOP_COMMIT}" "${GITHUB_WORKSPACE}/fork/windows-live-tv.patch" \
+            "${GITHUB_WORKSPACE}/out/windows-live-tv.patch" "composeApp"
+          regen mobile "${NUVIO_MOBILE_COMMIT}" "${GITHUB_WORKSPACE}/fork/android-live-tv.patch" \
+            "${GITHUB_WORKSPACE}/out/android-live-tv.patch" "."
+          ls -la "${GITHUB_WORKSPACE}/out"
+
+      # Nuvio's desktop build compiles two native Linux libraries, even when only running tests.
+      # The first needs GStreamer (CMake: gstreamer-1.0, gstreamer-app-1.0, gstreamer-video-1.0).
+      # The second (composeApp "buildLinuxPlayerBridge") needs pkg-config modules mpv, webkit2gtk-4.1,
+      # gtk+-3.0, x11, xcomposite and xext.
+      - name: Install the Linux libraries the desktop build compiles against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libmpv-dev libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libx11-dev libxcomposite-dev libxext-dev
+
+      # Looks up the newest stable Gradle from Gradle's own server on every run, so this never goes stale.
+      # If the lookup fails, the version the source code pins is used instead.
+      - name: Use the latest Gradle
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          latest="$(curl -fsS --retry 2 --max-time 20 https://services.gradle.org/versions/current \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' || true)"
+          if [[ ! "${latest}" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::warning::Could not look up the latest Gradle version; using the version the source code pins."
+            exit 0
+          fi
+          echo "Latest stable Gradle: ${latest}"
+          echo "GRADLE_LATEST=${latest}" >> "${GITHUB_ENV}"
+          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${latest}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
+          grep distributionUrl gradle/wrapper/gradle-wrapper.properties
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Run the Live TV tests (desktop)
+        working-directory: desktop
+        run: |
+          set -uo pipefail
+          {
+            echo "NUVIO_SUPABASE_URL=${NUVIO_API_URL}"
+            echo "NUVIO_SUPABASE_ANON_KEY=${NUVIO_API_KEY}"
+          } > local.properties
+          args=(:composeApp:desktopTest --tests "com.nuvio.app.features.livetv.*" --no-daemon --no-configuration-cache --stacktrace)
+          log="${GITHUB_WORKSPACE}/gradle-test.log"
+          if ./gradlew "${args[@]}" 2>&1 | tee "${log}"; then
+            exit 0
+          fi
+          if [[ -z "${GRADLE_LATEST:-}" ]]; then
+            exit 1
+          fi
+          # Safety net: if the newer Gradle is the problem, try once more with the version the source pins.
+          echo "::warning::The tests failed with Gradle ${GRADLE_LATEST}; trying once more with the Gradle version the source code pins."
+          ./gradlew --stop || true
+          git checkout -- gradle/wrapper/gradle-wrapper.properties
+          ./gradlew "${args[@]}" 2>&1 | tee -a "${log}"
+
+      # Only reached when the tests passed, so a patch you download here has been tested.
+      - name: Upload the new patches
+        uses: actions/upload-artifact@v7
+        with:
+          name: livetv-patches
+          path: out/*.patch
+          if-no-files-found: error
+
+      # Covers a failure at any point after the patches were rebuilt: the Gradle output
+      # (always written) and, when tests did run, the test report.
+      - name: Upload the details if something failed
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: failure-details
+          path: |
+            gradle-test.log
+            desktop/composeApp/build/reports/tests
+          if-no-files-found: ignore
