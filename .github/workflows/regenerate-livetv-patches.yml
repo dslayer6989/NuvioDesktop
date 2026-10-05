@@ -105,6 +105,35 @@ jobs:
             "${GITHUB_WORKSPACE}/out/android-live-tv.patch" "."
           ls -la "${GITHUB_WORKSPACE}/out"
 
+      # Nuvio's desktop build compiles two native Linux libraries, even when only running tests.
+      # The first needs GStreamer (CMake: gstreamer-1.0, gstreamer-app-1.0, gstreamer-video-1.0).
+      # The second (composeApp "buildLinuxPlayerBridge") needs pkg-config modules mpv, webkit2gtk-4.1,
+      # gtk+-3.0, x11, xcomposite and xext.
+      - name: Install the Linux libraries the desktop build compiles against
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libmpv-dev libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libx11-dev libxcomposite-dev libxext-dev
+
+      # Looks up the newest stable Gradle from Gradle's own server on every run, so this never goes stale.
+      # If the lookup fails, the version the source code pins is used instead.
+      - name: Use the latest Gradle
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          latest="$(curl -fsS --retry 2 --max-time 20 https://services.gradle.org/versions/current \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' || true)"
+          if [[ ! "${latest}" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::warning::Could not look up the latest Gradle version; using the version the source code pins."
+            exit 0
+          fi
+          echo "Latest stable Gradle: ${latest}"
+          echo "GRADLE_LATEST=${latest}" >> "${GITHUB_ENV}"
+          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${latest}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
+          grep distributionUrl gradle/wrapper/gradle-wrapper.properties
+
       - name: Set up Java
         uses: actions/setup-java@v5
         with:
@@ -117,11 +146,24 @@ jobs:
       - name: Run the Live TV tests (desktop)
         working-directory: desktop
         run: |
+          set -uo pipefail
           {
             echo "NUVIO_SUPABASE_URL=${NUVIO_API_URL}"
             echo "NUVIO_SUPABASE_ANON_KEY=${NUVIO_API_KEY}"
           } > local.properties
-          ./gradlew :composeApp:desktopTest --tests "com.nuvio.app.features.livetv.*" --no-daemon --stacktrace
+          args=(:composeApp:desktopTest --tests "com.nuvio.app.features.livetv.*" --no-daemon --no-configuration-cache --stacktrace)
+          log="${GITHUB_WORKSPACE}/gradle-test.log"
+          if ./gradlew "${args[@]}" 2>&1 | tee "${log}"; then
+            exit 0
+          fi
+          if [[ -z "${GRADLE_LATEST:-}" ]]; then
+            exit 1
+          fi
+          # Safety net: if the newer Gradle is the problem, try once more with the version the source pins.
+          echo "::warning::The tests failed with Gradle ${GRADLE_LATEST}; trying once more with the Gradle version the source code pins."
+          ./gradlew --stop || true
+          git checkout -- gradle/wrapper/gradle-wrapper.properties
+          ./gradlew "${args[@]}" 2>&1 | tee -a "${log}"
 
       # Only reached when the tests passed, so a patch you download here has been tested.
       - name: Upload the new patches
@@ -131,10 +173,14 @@ jobs:
           path: out/*.patch
           if-no-files-found: error
 
-      - name: Upload the test report (only if something failed)
+      # Covers a failure at any point after the patches were rebuilt: the Gradle output
+      # (always written) and, when tests did run, the test report.
+      - name: Upload the details if something failed
         if: ${{ failure() }}
         uses: actions/upload-artifact@v7
         with:
-          name: test-report
-          path: desktop/composeApp/build/reports/tests
+          name: failure-details
+          path: |
+            gradle-test.log
+            desktop/composeApp/build/reports/tests
           if-no-files-found: ignore

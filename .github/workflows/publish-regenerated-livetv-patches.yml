@@ -1,0 +1,102 @@
+name: Publish regenerated Live TV patches
+
+# Run by hand: Actions tab > Publish regenerated Live TV patches > Run workflow (branch: Dev).
+# Give it the run ID of a green "Regenerate Live TV patches" run (the number at the end of that run's
+# address). It copies that run's two tested .patch files onto the Dev branch in a single commit.
+# It refuses to run on any branch other than Dev, and it only touches the two patch files.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Run ID of a successful "Regenerate Live TV patches" run
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: publish-livetv-patches
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check the run you named, and that this is Dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_NAME}" != "Dev" ]]; then
+            echo "::error::This only publishes to the Dev branch, but it was started on ${GITHUB_REF_NAME}. Run it again with branch Dev."
+            exit 1
+          fi
+          if [[ ! "${RUN_ID}" =~ ^[0-9]+$ ]]; then
+            echo "::error::The run ID must be digits only (the number at the end of the run's address)."
+            exit 1
+          fi
+          info="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '[.name, .conclusion, .head_branch] | @tsv')"
+          IFS=$'\t' read -r run_name run_conclusion run_branch <<< "${info}"
+          echo "Run ${RUN_ID}: ${run_name} | ${run_conclusion} | ${run_branch}"
+          if [[ "${run_name}" != "Regenerate Live TV patches" ]]; then
+            echo "::error::Run ${RUN_ID} is '${run_name}', not 'Regenerate Live TV patches'."
+            exit 1
+          fi
+          if [[ "${run_conclusion}" != "success" ]]; then
+            echo "::error::Run ${RUN_ID} did not succeed (${run_conclusion}), so its patches were not fully tested."
+            exit 1
+          fi
+
+      # Leave persist-credentials at its default: the commit is pushed with it.
+      - name: Get the Dev branch (patch files only)
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            windows-live-tv.patch
+            android-live-tv.patch
+          sparse-checkout-cone-mode: false
+
+      - name: Download the tested patches from that run
+        uses: actions/download-artifact@v8
+        with:
+          name: livetv-patches
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: new
+
+      - name: Check the patches and commit them to Dev
+        run: |
+          set -euo pipefail
+          for f in windows-live-tv.patch android-live-tv.patch; do
+            if [[ ! -s "new/${f}" ]]; then
+              echo "::error::${f} is missing or empty in the downloaded artifact."
+              exit 1
+            fi
+            if [[ "$(head -c 10 "new/${f}")" != "diff --git" ]]; then
+              echo "::error::${f} does not look like a git patch."
+              exit 1
+            fi
+            git apply --numstat "new/${f}" > "${RUNNER_TEMP}/${f}.numstat"
+            for expected in features/livetv/LiveTvStateTest.kt features/settings/SettingsSearch.kt features/livetv/LiveTvRepository.kt; do
+              if ! grep -q "${expected}" "${RUNNER_TEMP}/${f}.numstat"; then
+                echo "::error::${f} does not touch ${expected}, so it is not the regenerated patch."
+                exit 1
+              fi
+            done
+            echo "${f}: $(wc -c < "new/${f}") bytes, $(wc -l < "${RUNNER_TEMP}/${f}.numstat") files, checks passed"
+          done
+          cp new/windows-live-tv.patch new/android-live-tv.patch .
+          git config user.name "ci"
+          git config user.email "ci@users.noreply.github.com"
+          git add windows-live-tv.patch android-live-tv.patch
+          if git diff --cached --quiet; then
+            echo "The patches on Dev are already identical to that run's patches. Nothing to commit."
+            exit 0
+          fi
+          git commit -q -m "fix(livetv): regenerate patches with profile chip fix, settings search entries and state tests"
+          git push origin HEAD:Dev
+          echo "Committed $(git rev-parse --short HEAD) to Dev."

@@ -261,7 +261,7 @@ jobs:
   publish:
     name: Publish release
     needs: [android, windows]
-    if: ${{ !cancelled() && (needs.android.result == 'success' || needs.windows.result == 'success') }}
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && (needs.android.result == 'success' || needs.windows.result == 'success') }}
     runs-on: ubuntu-24.04
     steps:
       - name: Download builds
