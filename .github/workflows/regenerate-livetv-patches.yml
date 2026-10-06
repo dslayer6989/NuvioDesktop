@@ -82,7 +82,11 @@ jobs:
             git clean -fdq
             git apply --whitespace=nowarn "${in}" || git apply --ignore-whitespace --whitespace=nowarn "${in}"
             git add -A
-            git commit -q -m "Current patch"
+            if git diff --cached --quiet; then
+              echo "The current patch applied with no changes."
+            else
+              git commit -q -m "Current patch"
+            fi
             python3 "${edit}" "${PWD}"
             # The Android phone build is phone-only; Android TV has its own patch and release.
             if [[ "${repo}" == "mobile" ]]; then
@@ -91,9 +95,15 @@ jobs:
             mkdir -p "$(dirname "${test_rel}")"
             cp "${test_src}" "${test_rel}"
             git add -A
-            git commit -q -m "Live TV: chip fix, settings search, tests"
-            git show --stat --format= HEAD
-            git show --format= HEAD -- "${repo_rel}" "${search_rel}"
+            # The current patch may already contain these edits, in which case there is nothing
+            # new to commit and `git commit` would exit 1 under `set -e`.
+            if git diff --cached --quiet; then
+              echo "No new edits: the current patch already contains them."
+            else
+              git commit -q -m "Live TV: chip fix, settings search, tests"
+              git show --stat --format= HEAD
+              git show --format= HEAD -- "${repo_rel}" "${search_rel}"
+            fi
             git diff --binary "${base}" HEAD -- ${spec} > "${out}"
             # Prove the new patch applies to a pristine copy of the base.
             local verify="${RUNNER_TEMP}/verify-${repo}"
