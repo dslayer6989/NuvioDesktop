@@ -1,0 +1,101 @@
+name: Publish regenerated Android TV patch
+
+# Run by hand: Actions tab > Publish regenerated Android TV patch > Run workflow (branch: Dev).
+# Give it the run ID of a green "Regenerate Android TV patch" run (the number at the end of that
+# run's address). It copies that run's tested android-tv-live-tv.patch onto the Dev branch in a
+# single commit. It refuses to run on any branch other than Dev, and it only touches that one file.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Run ID of a successful "Regenerate Android TV patch" run
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: publish-livetv-patches
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check the run you named, and that this is Dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_NAME}" != "Dev" ]]; then
+            echo "This workflow only publishes from the Dev branch. You ran it on ${GITHUB_REF_NAME}." >&2
+            exit 1
+          fi
+          if ! [[ "${RUN_ID}" =~ ^[0-9]+$ ]]; then
+            echo "The run ID must be a number. You gave: ${RUN_ID}" >&2
+            exit 1
+          fi
+          status=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '.conclusion')
+          echo "Run ${RUN_ID} concluded: ${status}"
+          if [[ "${status}" != "success" ]]; then
+            echo "That run did not succeed, so its patch is not published." >&2
+            exit 1
+          fi
+
+      # Leave persist-credentials at its default (Nuvio's repositories contain the libass-android gitlink).
+      - name: Get the Dev branch
+        uses: actions/checkout@v6
+        with:
+          ref: Dev
+
+      - name: Download the tested patch from that run
+        uses: actions/download-artifact@v7
+        with:
+          name: android-tv-patch
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: out
+
+      - name: Put the patch at the root of the repository
+        run: |
+          set -euo pipefail
+          ls -l out
+          if [[ ! -f out/android-tv-live-tv.patch ]]; then
+            echo "The run's artifact did not contain android-tv-live-tv.patch." >&2
+            exit 1
+          fi
+          cp out/android-tv-live-tv.patch android-tv-live-tv.patch
+          echo "android-tv-live-tv.patch: $(wc -c < android-tv-live-tv.patch) bytes"
+
+      - name: Commit and push to Dev
+        env:
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add android-tv-live-tv.patch
+          if git diff --cached --quiet; then
+            echo "No change to android-tv-live-tv.patch; nothing to publish."
+            exit 0
+          fi
+          git commit -q -m "Publish regenerated Android TV patch from run ${RUN_ID} [skip ci]"
+          # Another writer may have landed on Dev while this run was working, so rebase before pushing.
+          for attempt in 1 2; do
+            git fetch -q origin Dev
+            if git rebase -q origin/Dev; then
+              if git push -q origin HEAD:Dev; then
+                echo "Published android-tv-live-tv.patch to Dev."
+                exit 0
+              fi
+            else
+              git rebase --abort || true
+            fi
+            echo "Push attempt ${attempt} did not land; retrying."
+          done
+          echo "Could not publish the patch after two attempts." >&2
+          exit 1
