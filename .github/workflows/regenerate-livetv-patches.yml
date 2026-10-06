@@ -59,14 +59,15 @@ jobs:
           git config --global core.autocrlf false
           mkdir -p "${GITHUB_WORKSPACE}/out"
           tools="${GITHUB_WORKSPACE}/fork/.github/livetv-tools"
-          for f in edit_livetv.py LiveTvStateTest.kt; do
+          for f in edit_livetv.py phone_cleanup.py LiveTvStateTest.kt; do
             if [[ ! -f "${tools}/${f}" ]]; then
               echo "::error::${f} was not found in .github/livetv-tools of your repository. Add it, then run this again."
               exit 1
             fi
           done
-          python3 -m py_compile "${tools}/edit_livetv.py"
+          python3 -m py_compile "${tools}/edit_livetv.py" "${tools}/phone_cleanup.py"
           edit="${tools}/edit_livetv.py"
+          phone_cleanup="${tools}/phone_cleanup.py"
           test_src="${tools}/LiveTvStateTest.kt"
           test_rel="composeApp/src/commonTest/kotlin/com/nuvio/app/features/livetv/LiveTvStateTest.kt"
           repo_rel="composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvRepository.kt"
@@ -83,6 +84,10 @@ jobs:
             git add -A
             git commit -q -m "Current patch"
             python3 "${edit}" "${PWD}"
+            # The Android phone build is phone-only; Android TV has its own patch and release.
+            if [[ "${repo}" == "mobile" ]]; then
+              python3 "${phone_cleanup}" "${PWD}"
+            fi
             mkdir -p "$(dirname "${test_rel}")"
             cp "${test_src}" "${test_rel}"
             git add -A
