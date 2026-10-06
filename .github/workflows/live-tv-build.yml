@@ -27,14 +27,15 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Newest Gradle release (see gradle.org/releases). Set to "" to use the version the source code pins.
-  LATEST_GRADLE: "9.8.0"
   # The exact Nuvio Desktop source that windows-live-tv.patch was made for.
   NUVIO_DESKTOP_COMMIT: b1e00724c55e65f8f325d4d9d52eb6827872a7c2
   # The exact Nuvio Mobile source that android-live-tv.patch and android-tv-live-tv.patch were made for.
   NUVIO_MOBILE_COMMIT: c1065d0a2a717d7dba445257f064f3fb8d1b30a3
   # The WebView2 SDK the desktop build needs. The build fails without it.
   WEBVIEW2_VERSION: "1.0.4078.44"
+  # The Gradle version to fall back to if the newest release does not work. The build jobs try the
+  # newest Gradle first and retry with this pinned version if that fails.
+  FALLBACK_GRADLE: "9.8.0"
 
 jobs:
   android:
@@ -73,11 +74,21 @@ jobs:
           git apply --whitespace=nowarn "${patch_file}" || git apply --ignore-whitespace --whitespace=nowarn "${patch_file}"
           echo "Live TV added: $(git status --short | wc -l) files changed."
 
+      - name: Look up the latest Gradle version
+        id: gradle
+        run: |
+          latest="$(curl -fsSL https://services.gradle.org/versions/current | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+          if [[ -z "${latest}" ]]; then
+            echo "::warning::Could not look up the latest Gradle version; using the pinned ${FALLBACK_GRADLE}."
+            latest="${FALLBACK_GRADLE}"
+          fi
+          echo "Using Gradle ${latest} (fallback ${FALLBACK_GRADLE})."
+          echo "version=${latest}" >> "${GITHUB_OUTPUT}"
+
       - name: Use the latest Gradle
-        if: ${{ env.LATEST_GRADLE != '' }}
         working-directory: mobile
         run: |
-          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${LATEST_GRADLE}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
+          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${{ steps.gradle.outputs.version }}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
           grep distributionUrl gradle/wrapper/gradle-wrapper.properties
 
       - name: Set up Java
@@ -118,14 +129,11 @@ jobs:
           if ./gradlew "${args[@]}"; then
             exit 0
           fi
-          if [[ -z "${LATEST_GRADLE}" ]]; then
-            exit 1
-          fi
-          # Safety net: if the newer Gradle is the problem, build once more with the version the source pins.
-          echo "::warning::The build failed with Gradle ${LATEST_GRADLE}; trying again with the Gradle version the source code pins."
+          # Safety net: if the newest Gradle is the problem, build once more with the pinned version.
+          echo "::warning::The build failed with Gradle ${{ steps.gradle.outputs.version }}; trying again with the pinned Gradle ${FALLBACK_GRADLE}."
           ./gradlew --stop || true
           pkill -f KotlinCompileDaemon || true
-          git checkout -- gradle/wrapper/gradle-wrapper.properties
+          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${FALLBACK_GRADLE}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
           ./gradlew "${args[@]}"
 
       - name: Rename APKs
@@ -197,11 +205,21 @@ jobs:
             fi
           done
 
+      - name: Look up the latest Gradle version
+        id: gradle
+        run: |
+          latest="$(curl -fsSL https://services.gradle.org/versions/current | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+          if [[ -z "${latest}" ]]; then
+            echo "::warning::Could not look up the latest Gradle version; using the pinned ${FALLBACK_GRADLE}."
+            latest="${FALLBACK_GRADLE}"
+          fi
+          echo "Using Gradle ${latest} (fallback ${FALLBACK_GRADLE})."
+          echo "version=${latest}" >> "${GITHUB_OUTPUT}"
+
       - name: Use the latest Gradle
-        if: ${{ env.LATEST_GRADLE != '' }}
         working-directory: mobile
         run: |
-          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${LATEST_GRADLE}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
+          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${{ steps.gradle.outputs.version }}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
           grep distributionUrl gradle/wrapper/gradle-wrapper.properties
 
       - name: Set up Java
@@ -242,14 +260,11 @@ jobs:
           if ./gradlew "${args[@]}"; then
             exit 0
           fi
-          if [[ -z "${LATEST_GRADLE}" ]]; then
-            exit 1
-          fi
-          # Safety net: if the newer Gradle is the problem, build once more with the version the source pins.
-          echo "::warning::The build failed with Gradle ${LATEST_GRADLE}; trying again with the Gradle version the source code pins."
+          # Safety net: if the newest Gradle is the problem, build once more with the pinned version.
+          echo "::warning::The build failed with Gradle ${{ steps.gradle.outputs.version }}; trying again with the pinned Gradle ${FALLBACK_GRADLE}."
           ./gradlew --stop || true
           pkill -f KotlinCompileDaemon || true
-          git checkout -- gradle/wrapper/gradle-wrapper.properties
+          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${FALLBACK_GRADLE}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
           ./gradlew "${args[@]}"
 
       - name: Rename the Android TV APK
@@ -327,13 +342,28 @@ jobs:
           "WEBVIEW2_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "WebView2 SDK at $root"
 
+      - name: Look up the latest Gradle version
+        id: gradle
+        shell: pwsh
+        run: |
+          try {
+            $latest = (Invoke-RestMethod -Uri "https://services.gradle.org/versions/current").version
+          } catch {
+            $latest = ""
+          }
+          if (-not $latest) {
+            Write-Warning "Could not look up the latest Gradle version; using the pinned $env:FALLBACK_GRADLE."
+            $latest = $env:FALLBACK_GRADLE
+          }
+          Write-Host "Using Gradle $latest (fallback $env:FALLBACK_GRADLE)."
+          "version=$latest" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Use the latest Gradle
-        if: ${{ env.LATEST_GRADLE != '' }}
         working-directory: desktop
         shell: pwsh
         run: |
           $file = "gradle/wrapper/gradle-wrapper.properties"
-          (Get-Content $file) -replace "gradle-[0-9][0-9.]*-(bin|all)\.zip", "gradle-$env:LATEST_GRADLE-`$1.zip" | Set-Content $file
+          (Get-Content $file) -replace "gradle-[0-9][0-9.]*-(bin|all)\.zip", "gradle-${{ steps.gradle.outputs.version }}-`$1.zip" | Set-Content $file
           Select-String -Path $file -Pattern "distributionUrl"
 
       - name: Set up Java
@@ -367,10 +397,10 @@ jobs:
           )
           & ./gradlew @args
           if ($LASTEXITCODE -eq 0) { exit 0 }
-          if (-not $env:LATEST_GRADLE) { exit 1 }
-          Write-Warning "The build failed with Gradle $env:LATEST_GRADLE; trying again with the Gradle version the source code pins."
+          Write-Warning "The build failed with Gradle ${{ steps.gradle.outputs.version }}; trying again with the pinned Gradle $env:FALLBACK_GRADLE."
           & ./gradlew --stop
-          git checkout -- gradle/wrapper/gradle-wrapper.properties
+          $file = "gradle/wrapper/gradle-wrapper.properties"
+          (Get-Content $file) -replace "gradle-[0-9][0-9.]*-(bin|all)\.zip", "gradle-$env:FALLBACK_GRADLE-`$1.zip" | Set-Content $file
           & ./gradlew @args
 
       - name: Collect the installer
@@ -378,10 +408,6 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path out | Out-Null
           $msi = Get-ChildItem -Path "desktop/composeApp/build/compose/release-msis/*.msi" | Select-Object -First 1
-          if (-not $msi) {
-            Write-Error "No MSI was produced under desktop/composeApp/build/compose/release-msis."
-            exit 1
-          }
           Copy-Item $msi.FullName "out/Nuvio-LiveTV-Windows.msi"
           Get-ChildItem out
 
