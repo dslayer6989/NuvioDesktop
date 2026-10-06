@@ -1,0 +1,95 @@
+name: Regenerate Android TV patch
+
+# Run by hand: Actions tab > Regenerate Android TV patch > Run workflow.
+# Builds android-tv-live-tv.patch on top of the current android-live-tv.patch: the TV launcher
+# entry and banner, TV detection, and the TV guide layout. It never pushes anything.
+# It reads the helper files from .github/livetv-tools in this repository.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regenerate-android-tv-patch
+  cancel-in-progress: false
+
+env:
+  NUVIO_MOBILE_COMMIT: c1065d0a2a717d7dba445257f064f3fb8d1b30a3
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-24.04
+    steps:
+      # Leave persist-credentials at its default (Nuvio's repositories contain the libass-android gitlink).
+      - name: Get the current patches and helper files from this repository
+        uses: actions/checkout@v6
+        with:
+          path: fork
+          sparse-checkout: |
+            android-live-tv.patch
+            .github/livetv-tools/
+          sparse-checkout-cone-mode: false
+
+      - name: Get the official Nuvio Mobile source
+        uses: actions/checkout@v6
+        with:
+          repository: NuvioMedia/NuvioMobile
+          ref: ${{ env.NUVIO_MOBILE_COMMIT }}
+          path: mobile
+
+      - name: Rebuild the Android TV patch
+        run: |
+          set -euo pipefail
+          git config --global user.name "ci"
+          git config --global user.email "ci@users.noreply.github.com"
+          git config --global core.autocrlf false
+          mkdir -p "${GITHUB_WORKSPACE}/out"
+          tools="${GITHUB_WORKSPACE}/fork/.github/livetv-tools"
+          for f in edit_tv.py; do
+            if [[ ! -f "${tools}/${f}" ]]; then
+              echo "::error::${f} was not found in .github/livetv-tools of your repository. Add it, then run this again."
+              exit 1
+            fi
+          done
+          python3 -m py_compile "${tools}/edit_tv.py"
+          cd "${GITHUB_WORKSPACE}/mobile"
+          git reset --hard -q "${NUVIO_MOBILE_COMMIT}"
+          git clean -fdq
+          # The TV patch is built on top of the phone patch, so the phone build stays the base.
+          git apply --whitespace=nowarn "${GITHUB_WORKSPACE}/fork/android-live-tv.patch" \
+            || git apply --ignore-whitespace --whitespace=nowarn "${GITHUB_WORKSPACE}/fork/android-live-tv.patch"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "The phone patch applied with no changes."
+          else
+            git commit -q -m "Phone patch"
+          fi
+          python3 "${tools}/edit_tv.py" "${PWD}"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No new edits: the TV layer is already present."
+          else
+            git commit -q -m "Android TV layer"
+            git show --stat --format= HEAD
+          fi
+          git diff --binary "${NUVIO_MOBILE_COMMIT}" HEAD -- . > "${GITHUB_WORKSPACE}/out/android-tv-live-tv.patch"
+          # Prove the TV patch applies on top of the phone patch in a pristine copy of the base.
+          verify="${RUNNER_TEMP}/verify-tv"
+          git worktree add --detach -q "${verify}" "${NUVIO_MOBILE_COMMIT}"
+          (
+            cd "${verify}"
+            git apply --whitespace=nowarn "${GITHUB_WORKSPACE}/fork/android-live-tv.patch"
+            git apply --check "${GITHUB_WORKSPACE}/out/android-tv-live-tv.patch"
+          )
+          git worktree remove --force "${verify}"
+          echo "OK: android-tv-live-tv.patch applies on top of the phone patch"
+          ls -la "${GITHUB_WORKSPACE}/out"
+
+      - name: Upload the Android TV patch
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-tv-patch
+          path: out/android-tv-live-tv.patch
+          if-no-files-found: error
