@@ -98,5 +98,20 @@ jobs:
             exit 0
           fi
           git commit -q -m "fix(livetv): regenerate patches with profile chip fix, settings search entries and state tests"
-          git push origin HEAD:Dev
-          echo "Committed $(git rev-parse --short HEAD) to Dev."
+          # Another commit may have landed on Dev while this run was working (for example a workflow
+          # or tool file). Rebase onto the current Dev so the push is a fast-forward, and retry once.
+          for attempt in 1 2; do
+            git fetch --quiet origin Dev
+            if git rebase --quiet origin/Dev; then
+              if git push origin HEAD:Dev; then
+                echo "Committed $(git rev-parse --short HEAD) to Dev."
+                exit 0
+              fi
+            else
+              git rebase --abort || true
+            fi
+            echo "::warning::Push attempt ${attempt} did not go through; retrying after re-reading Dev."
+            sleep 3
+          done
+          echo "::error::Could not push the patches to Dev after two attempts. Re-run this workflow."
+          exit 1

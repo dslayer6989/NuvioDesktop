@@ -14,6 +14,37 @@ index e126f59..da06352 100644
          minSdk = libs.versions.android.minSdk.get().toInt()
          targetSdk = libs.versions.android.targetSdk.get().toInt()
          versionCode = releaseAppVersionCode
+diff --git a/androidApp/src/main/AndroidManifest.xml b/androidApp/src/main/AndroidManifest.xml
+index ee95ef0..b84e3d7 100644
+--- a/androidApp/src/main/AndroidManifest.xml
++++ b/androidApp/src/main/AndroidManifest.xml
+@@ -1,6 +1,10 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+ 
++    <!-- Android TV, Google TV and Fire TV; the app still installs on devices without these features. -->
++    <uses-feature android:name="android.software.leanback" android:required="false" />
++    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
++
+     <uses-permission android:name="android.permission.INTERNET" />
+     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+@@ -72,6 +76,7 @@
+ 
+         <activity
+             android:name="com.nuvio.app.launcher.AppIconDefault"
++            android:banner="@drawable/live_tv_banner"
+             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+             android:enabled="true"
+             android:exported="true"
+@@ -82,6 +87,7 @@
+             <intent-filter>
+                 <action android:name="android.intent.action.MAIN" />
+                 <category android:name="android.intent.category.LAUNCHER" />
++                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+             </intent-filter>
+         </activity>
+ 
 diff --git a/androidApp/src/release/res/values/strings.xml b/androidApp/src/release/res/values/strings.xml
 new file mode 100644
 index 0000000..8bc40b6
@@ -64,14 +95,15 @@ index c74113f..1869676 100644
              )
          }
 diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-index 0142158..dd67461 100644
+index 0142158..f7ee4c4 100644
 --- a/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
 +++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt
-@@ -91,6 +91,7 @@ open class MainActivity : AppCompatActivity() {
+@@ -91,6 +91,8 @@ open class MainActivity : AppCompatActivity() {
          SyncClientIdentityStorage.initialize(applicationContext)
          AddonHttpClientProvider.initialize(applicationContext)
          AddonStorage.initialize(applicationContext)
 +        com.nuvio.app.features.livetv.LiveTvStorage.initialize(applicationContext)
++        com.nuvio.app.features.livetv.LiveTvTelevision.apply(applicationContext)
          AuthStorage.initialize(applicationContext)
          ServerConfigurationStorage.initialize(applicationContext)
          LibraryStorage.initialize(applicationContext)
@@ -126,6 +158,77 @@ index 0000000..237374b
 +        return Instant.ofEpochMilli(epochMs).atZone(zone).toLocalDate().atStartOfDay(zone).toInstant().toEpochMilli()
 +    }
 +}
+diff --git a/composeApp/src/androidMain/kotlin/com/nuvio/app/features/livetv/LiveTvTelevision.android.kt b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/livetv/LiveTvTelevision.android.kt
+new file mode 100644
+index 0000000..f685ab2
+--- /dev/null
++++ b/composeApp/src/androidMain/kotlin/com/nuvio/app/features/livetv/LiveTvTelevision.android.kt
+@@ -0,0 +1,41 @@
++package com.nuvio.app.features.livetv
++
++import android.app.UiModeManager
++import android.content.Context
++import android.content.pm.PackageManager
++import android.content.res.Configuration
++
++/**
++ * Android TV, Google TV and Fire TV all report the television UI mode. Some boxes only declare the
++ * leanback feature, and Fire TV devices also declare their own feature, so any of the three counts.
++ * Never throws: if the system cannot be asked, the app keeps its normal phone layout.
++ */
++internal actual object LiveTvTelevision {
++    @Volatile
++    private var television: Boolean = false
++
++    @Volatile
++    private var fireTv: Boolean = false
++
++    actual val isTelevision: Boolean
++        get() = television
++
++    actual val isFireTv: Boolean
++        get() = fireTv
++
++    /** Called once from MainActivity, before the UI is composed. */
++    fun apply(context: Context) {
++        val result = runCatching {
++            val uiMode = context.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
++            val pm = context.packageManager
++            val television = uiMode?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION ||
++                pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
++                pm.hasSystemFeature(FireTvFeature)
++            television to pm.hasSystemFeature(FireTvFeature)
++        }.getOrNull()
++        television = result?.first ?: false
++        fireTv = result?.second ?: false
++    }
++
++    private const val FireTvFeature = "amazon.hardware.fire_tv"
++}
+diff --git a/composeApp/src/androidMain/res/drawable/live_tv_banner.xml b/composeApp/src/androidMain/res/drawable/live_tv_banner.xml
+new file mode 100644
+index 0000000..cb96287
+--- /dev/null
++++ b/composeApp/src/androidMain/res/drawable/live_tv_banner.xml
+@@ -0,0 +1,18 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Android TV launcher banner (320x180dp): the app icon on a dark tile. -->
++<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
++    <item>
++        <shape android:shape="rectangle">
++            <gradient
++                android:angle="0"
++                android:endColor="#FF1A1A1A"
++                android:startColor="#FF0D0D0D" />
++            <size android:width="320dp" android:height="180dp" />
++        </shape>
++    </item>
++    <item
++        android:width="150dp"
++        android:height="150dp"
++        android:drawable="@mipmap/ic_launcher_foreground"
++        android:gravity="center" />
++</layer-list>
 diff --git a/composeApp/src/commonMain/composeResources/files/licenses/theme-fonts/audiowide-OFL.txt b/composeApp/src/commonMain/composeResources/files/licenses/theme-fonts/audiowide-OFL.txt
 new file mode 100644
 index 0000000..19bb4ad
@@ -8743,10 +8846,10 @@ index 0000000..9dd137e
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvGuideGrid.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvGuideGrid.kt
 new file mode 100644
-index 0000000..3cc298f
+index 0000000..3185b67
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvGuideGrid.kt
-@@ -0,0 +1,577 @@
+@@ -0,0 +1,587 @@
 +package com.nuvio.app.features.livetv
 +
 +import androidx.compose.foundation.background
@@ -8826,6 +8929,14 @@ index 0000000..3cc298f
 +            halfHourWidth = 150.dp,
 +            headerHeight = 36.dp,
 +            compact = true,
++        )
++        /** Couch-distance layout for Android TV: bigger rows, wider slots, larger channel column. */
++        val Television = LiveTvGridMetrics(
++            channelColumnWidth = 300.dp,
++            rowHeight = 96.dp,
++            halfHourWidth = 260.dp,
++            headerHeight = 56.dp,
++            compact = false,
 +        )
 +    }
 +}
@@ -9067,6 +9178,7 @@ index 0000000..3cc298f
 +                        selected = program.id == selectedProgramId,
 +                        focused = focused,
 +                        compact = metrics.compact,
++                        television = LiveTvTelevision.isTelevision,
 +                        cellStartPx = cellStartPx,
 +                        cellWidthPx = cellWidthPx,
 +                        scrollXPx = scrollXPx,
@@ -9174,6 +9286,7 @@ index 0000000..3cc298f
 +    cellWidthPx: Float,
 +    scrollXPx: () -> Float,
 +    onClick: () -> Unit,
++    television: Boolean = false,
 +) {
 +    val palette = LiveTvColors.current
 +    val airing = program.isAiringAt(nowMs)
@@ -9196,7 +9309,7 @@ index 0000000..3cc298f
 +            )
 +            .then(
 +                if (highlight) {
-+                    Modifier.border(1.5.dp, LiveTvColors.AccentGradient, shape)
++                    Modifier.border(if (television) 3.dp else 1.5.dp, LiveTvColors.AccentGradient, shape)
 +                } else if (airing) {
 +                    Modifier.border(1.dp, LiveTvColors.Accent.copy(alpha = 0.35f), shape)
 +                } else {
@@ -9241,7 +9354,7 @@ index 0000000..3cc298f
 +            Text(
 +                text = program.title,
 +                style = TextStyle(
-+                    fontSize = if (compact) 13.sp else 14.sp,
++                    fontSize = if (television) 18.sp else if (compact) 13.sp else 14.sp,
 +                    fontWeight = if (airing) FontWeight.Bold else FontWeight.SemiBold,
 +                    color = if (past) LiveTvColors.TextMuted else LiveTvColors.TextPrimary,
 +                ),
@@ -10788,10 +10901,10 @@ index 0000000..8a21be3
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvScreen.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvScreen.kt
 new file mode 100644
-index 0000000..48bfdc9
+index 0000000..6c417bd
 --- /dev/null
 +++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvScreen.kt
-@@ -0,0 +1,1016 @@
+@@ -0,0 +1,1020 @@
 +package com.nuvio.app.features.livetv
 +
 +import androidx.compose.animation.core.animate
@@ -11181,7 +11294,11 @@ index 0000000..48bfdc9
 +) {
 +    val channels = remember(state.guide, state.selectedGroupId, state.favoriteIds, state.recentIds) { state.visibleChannels() }
 +    val favoriteSet = remember(state.favoriteIds) { state.favoriteIds.toSet() }
-+    val metrics = if (compact) LiveTvGridMetrics.Compact else LiveTvGridMetrics.Desktop
++    val metrics = when {
++        LiveTvTelevision.isTelevision -> LiveTvGridMetrics.Television
++        compact -> LiveTvGridMetrics.Compact
++        else -> LiveTvGridMetrics.Desktop
++    }
 +    val density = LocalDensity.current
 +    val halfHourBucket = LiveTvTime.floorToHalfHour(nowMs)
 +    val window = remember(guide, halfHourBucket) { liveTvGuideWindow(guide, nowMs) }
@@ -12173,6 +12290,27 @@ index 0000000..cb4ba25
 +internal fun liveTvDurationParts(durationMs: Long): Pair<Int, Int> {
 +    val totalMinutes = ((durationMs + LiveTvTime.MINUTE_MS - 1) / LiveTvTime.MINUTE_MS).toInt().coerceAtLeast(0)
 +    return totalMinutes / 60 to totalMinutes % 60
++}
+diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvTelevision.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvTelevision.kt
+new file mode 100644
+index 0000000..41345a1
+--- /dev/null
++++ b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvTelevision.kt
+@@ -0,0 +1,15 @@
++package com.nuvio.app.features.livetv
++
++/**
++ * Whether this device is a television: Android TV, Google TV or Fire TV.
++ *
++ * The guide code in commonMain reads these two flags to pick the couch-distance layout. Only the
++ * Android actual can answer them; every other target reports false, so the phone and desktop
++ * layouts are unchanged there.
++ */
++internal expect object LiveTvTelevision {
++    val isTelevision: Boolean
++
++    /** Fire TV does not show app-provided home screen rows, so those are skipped there. */
++    val isFireTv: Boolean
 +}
 diff --git a/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvTheme.kt b/composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv/LiveTvTheme.kt
 new file mode 100644
@@ -13926,6 +14064,20 @@ index 0000000..6176666
 +        assertNull(loaded.withoutRecents().selectedGroupId)
 +    }
 +}
+diff --git a/composeApp/src/desktopMain/kotlin/com/nuvio/app/features/livetv/LiveTvTelevision.desktop.kt b/composeApp/src/desktopMain/kotlin/com/nuvio/app/features/livetv/LiveTvTelevision.desktop.kt
+new file mode 100644
+index 0000000..babcff7
+--- /dev/null
++++ b/composeApp/src/desktopMain/kotlin/com/nuvio/app/features/livetv/LiveTvTelevision.desktop.kt
+@@ -0,0 +1,8 @@
++package com.nuvio.app.features.livetv
++
++/** Not a television: the desktop build keeps its normal layout. */
++internal actual object LiveTvTelevision {
++    actual val isTelevision: Boolean = false
++
++    actual val isFireTv: Boolean = false
++}
 diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvPlatform.ios.kt
 new file mode 100644
 index 0000000..18787cd
@@ -13973,4 +14125,18 @@ index 0000000..18787cd
 +    }
 +
 +    private fun Long.toNSDate(): NSDate = NSDate.dateWithTimeIntervalSince1970(this / 1000.0)
++}
+diff --git a/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvTelevision.ios.kt b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvTelevision.ios.kt
+new file mode 100644
+index 0000000..babcff7
+--- /dev/null
++++ b/composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv/LiveTvTelevision.ios.kt
+@@ -0,0 +1,8 @@
++package com.nuvio.app.features.livetv
++
++/** Not a television: the desktop build keeps its normal layout. */
++internal actual object LiveTvTelevision {
++    actual val isTelevision: Boolean = false
++
++    actual val isFireTv: Boolean = false
 +}

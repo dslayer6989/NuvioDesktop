@@ -1,138 +1,130 @@
 <div align="center">
 
-  <img src="composeApp/src/commonMain/composeResources/drawable/app_logo_wordmark.png" alt="Nuvio" width="300" />
+  <img src="https://raw.githubusercontent.com/NuvioMedia/NuvioDesktop/b1e00724c55e65f8f325d4d9d52eb6827872a7c2/composeApp/src/commonMain/composeResources/drawable/app_logo_wordmark.png" alt="Nuvio Live TV" width="300" />
   <br />
   <br />
 
-  [![Contributors][contributors-shield]][contributors-url]
-  [![Forks][forks-shield]][forks-url]
-  [![Stargazers][stars-shield]][stars-url]
-  [![Issues][issues-shield]][issues-url]
+  [![Latest release][release-shield]][release-url]
+  [![Build][build-shield]][build-url]
   [![License][license-shield]][license-url]
 
   <p>
-    A desktop media app for Windows, macOS, and Linux.
+    <strong>Nuvio Live TV</strong> — a patch-based distribution that adds a Live TV guide to Nuvio.
     <br />
-    Browse, organize, and play media from sources you add.
+    Windows desktop, Android phones and tablets, and Android TV, Google TV and Fire TV.
   </p>
 
 </div>
 
-## ⚠️ Alpha Software - Slow Development - Testers Only
+## ⚠️ Alpha Software — Testers Only
 
-Nuvio Desktop is currently in alpha and is intended only for testers. It is under development and is not suitable for daily use.
+Nuvio Live TV is in alpha and is intended only for testers. It is not suitable for daily use.
 
 Expect breaking changes with every update. Features, settings, stored data, and compatibility may change or stop working without notice. Do not rely on this build as your primary media app, and report any issues you encounter during testing.
 
-## About
+## What this repository is
 
-Nuvio Desktop is a media client for browsing metadata, managing collections and watch progress, downloading media, and playing streams from user-installed extensions or user-provided sources.
+This is **not** a fork of Nuvio's source code. It is a small distribution layer that adds a Live TV feature to the official Nuvio apps.
 
-## Installation
+The repository contains three patch files and one build workflow. Nothing else ships.
 
-Download the latest desktop build from [GitHub Releases](https://github.com/NuvioMedia/NuvioDesktop/releases/latest).
+| File | What it does |
+| --- | --- |
+| `windows-live-tv.patch` | Adds Live TV to the official Nuvio Desktop app |
+| `android-live-tv.patch` | Adds Live TV to the official Nuvio Mobile app (phones and tablets) |
+| `android-tv-live-tv.patch` | Adds Live TV **and** the Android TV layer (TV launcher entry, banner, couch-distance guide layout) |
+| `.github/workflows/live-tv-build.yml` | Applies the patches to the official source and publishes the installers |
 
-Release packages are provided for supported desktop platforms:
+Each patch is applied to a **pinned commit** of the official Nuvio source, so a build is always reproducible:
 
-- Windows: MSI installer
-- macOS: DMG installer
-- Linux: DEB, RPM, FLATPAK and AppImage available.
+| Target | Official source | Pinned commit |
+| --- | --- | --- |
+| Windows MSI | [`NuvioMedia/NuvioDesktop`](https://github.com/NuvioMedia/NuvioDesktop) | `b1e0072` |
+| Android phone APKs | [`NuvioMedia/NuvioMobile`](https://github.com/NuvioMedia/NuvioMobile) | `c1065d0` |
+| Android TV APK | [`NuvioMedia/NuvioMobile`](https://github.com/NuvioMedia/NuvioMobile) | `c1065d0` |
 
-## Development
+Because the apps are built from Nuvio's own source, everything Nuvio does — browsing, metadata, addons, playback, tracking — works exactly as it does upstream. Live TV is the only addition.
 
-```bash
-git clone https://github.com/NuvioMedia/NuvioDesktop.git
-cd NuvioDesktop
-```
+## What Live TV adds
 
-Run from source:
+- **A channel guide** with a time grid, channel rows, and program cells that show a progress bar for what is airing now.
+- **Addon sources** — paste a Stremio addon manifest link (or a bare addon root) and its channels appear in the guide.
+- **Favorites and recents** — mark channels as favorites and the guide remembers what you watched.
+- **Source memory** — when a channel has several streams, the app remembers the last one that worked and tries it first next time.
+- **Backup streams** — if a stream fails, the player advances to the next source automatically.
+- **Profiles** — Live TV settings are stored per profile, alongside the rest of your Nuvio settings.
+- **A TV layout** — on Android TV, Google TV and Fire TV the guide switches to a couch-distance layout with larger rows, larger text, and a thicker focus highlight, navigated with the remote's D-pad.
 
-```bash
-./gradlew :composeApp:run
-```
+## Download and install
 
-On Windows PowerShell:
+Get the newest build from the [Releases page][release-url]. Every release contains all three apps.
 
-```powershell
-.\gradlew.bat :composeApp:run
-```
+### Android phone and tablet
 
-Build a release package for the current host:
+Download **`Nuvio-LiveTV-Android-phone.apk`**, open it, and allow installing from this source when asked.
 
-```bash
-./gradlew :composeApp:packageReleaseDistributionForCurrentOS
-```
+It installs next to the official Nuvio app as **Nuvio Live TV**. The `older-32bit`, `x86` and `x86_64` files are for unusual devices; most phones want the `phone` file.
 
-Platform-specific packaging:
+### Android TV, Google TV and Fire TV
 
-```bash
-# Windows
-./gradlew :composeApp:packageReleaseMsi --rerun-tasks
+Download **`Nuvio-LiveTV-Android-TV.apk`** and install it on the TV.
 
-# macOS
-./scripts/build-macos-release-dmgs.sh --package-only
+It installs next to the official Nuvio app as **Nuvio Live TV**, with a TV launcher entry and the couch-distance guide layout. Fire TV does not show app-provided home screen rows, so those are skipped there.
 
-# Linux
-./gradlew :composeApp:packageReleaseDeb
-```
+### Windows desktop
 
-## Project Structure
+Download **`Nuvio-LiveTV-Windows.msi`** and double-click it.
 
-- `composeApp/` contains the app code.
-- `composeApp/src/commonMain/` contains shared UI, features, repositories, and platform-agnostic logic.
-- `composeApp/src/desktopMain/` contains desktop-specific integrations.
-- `composeApp/Configuration/DesktopVersion.properties` contains the desktop release version and build code.
+It replaces the regular Nuvio desktop app and keeps your settings. If Nuvio later offers an app update, skip it: that update doesn't include Live TV.
 
-## Versioning
+## Getting started
 
-Desktop versions are set in `composeApp/Configuration/DesktopVersion.properties`.
+1. Install the app for your device from the [Releases page][release-url].
+2. Sign in with your Nuvio account.
+3. Open the **Live TV** tab.
+4. Paste your addon's manifest link.
+5. Pick a channel and press play.
 
-```properties
-VERSION_NAME=0.1.1-alpha
-VERSION_CODE=1
-```
+## Building it yourself
 
-Use the version helper when changing desktop release versions:
+The build runs entirely in GitHub Actions. To produce a release:
 
-```bash
-./scripts/set-version.sh --desktop 0.1.2-alpha --desktop-code 2
-./scripts/set-version.sh --show
-```
+1. Open the **Actions** tab.
+2. Choose **Build Nuvio Live TV**.
+3. Press **Run workflow**.
 
-## Legal & DMCA
+The workflow checks out the official Nuvio source at the pinned commits, applies the patches, builds the Windows installer and the Android APKs, and publishes them as one release tagged `live-tv-build-N`.
 
-Nuvio functions solely as a client-side interface for browsing metadata and playing media provided by user-installed extensions and/or user-provided sources. It is intended for content the user owns or is otherwise authorized to access.
+You can also let a push to `Dev` or `main` start a build. Pushing a change to any of the three patch files triggers it automatically.
 
-Nuvio is not affiliated with any third-party extensions, catalogs, sources, or content providers. It does not host, store, or distribute any media content.
+## Updating the Live TV feature
 
-For comprehensive legal information, including our full disclaimer, third-party extension policy, and DMCA/Copyright information, please visit our [Legal & Disclaimer Page](https://nuvioapp.space/legal).
+The patches are generated, not hand-edited. The generator scripts live in `.github/livetv-tools/`:
 
-## Built With
+| Script | What it edits |
+| --- | --- |
+| `edit_livetv.py` | The shared Live TV feature (guide, repository, playback, settings) |
+| `phone_cleanup.py` | Removes the TV launcher entries from the phone build |
+| `edit_tv.py` | Adds the Android TV layer on top of the phone build |
 
-- Kotlin Multiplatform
-- Compose Multiplatform
-- Kotlin
-- Compose Desktop packaging
-- Native desktop player integrations
+To change the feature, edit the relevant script, then run **Regenerate Live TV patches** followed by **Publish regenerated Live TV patches**. For TV changes, run **Regenerate Android TV patch** followed by **Publish regenerated Android TV patch**. Each regenerate run applies the edits, runs the Live TV tests, and only offers the new patches if the tests pass.
 
-## Star History
+## Notes and limitations
 
-<a href="https://www.star-history.com/#NuvioMedia/NuvioDesktop&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=NuvioMedia/NuvioDesktop&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=NuvioMedia/NuvioDesktop&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=NuvioMedia/NuvioDesktop&type=date&legend=top-left" />
- </picture>
-</a>
+- **Alpha.** The Live TV feature is under active development.
+- **Android TV home screen rows.** App-provided home screen rows are best-effort. They appear on some launchers and not others, and Fire TV does not support them at all. The app never crashes if a launcher rejects them.
+- **Samsung and LG TVs.** Tizen and webOS cannot install Android APKs, so this distribution does not support them. Use a streaming stick or cast from your phone instead.
+- **Windows updates.** The Live TV installer replaces the official Nuvio desktop app. If Nuvio offers an in-app update, skip it, because that update does not include Live TV.
 
-<!-- MARKDOWN LINKS & IMAGES -->
-[contributors-shield]: https://img.shields.io/github/contributors/NuvioMedia/NuvioDesktop.svg?style=for-the-badge
-[contributors-url]: https://github.com/NuvioMedia/NuvioDesktop/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/NuvioMedia/NuvioDesktop.svg?style=for-the-badge
-[forks-url]: https://github.com/NuvioMedia/NuvioDesktop/network/members
-[stars-shield]: https://img.shields.io/github/stars/NuvioMedia/NuvioDesktop.svg?style=for-the-badge
-[stars-url]: https://github.com/NuvioMedia/NuvioDesktop/stargazers
-[issues-shield]: https://img.shields.io/github/issues/NuvioMedia/NuvioDesktop.svg?style=for-the-badge
-[issues-url]: https://github.com/NuvioMedia/NuvioDesktop/issues
-[license-shield]: https://img.shields.io/github/license/NuvioMedia/NuvioDesktop.svg?style=for-the-badge
-[license-url]: https://github.com/NuvioMedia/NuvioDesktop/blob/main/LICENSE
+## Credits
+
+Nuvio Live TV is built on the work of the Nuvio project. All app code, design and features come from [`NuvioMedia/NuvioDesktop`](https://github.com/NuvioMedia/NuvioDesktop) and [`NuvioMedia/NuvioMobile`](https://github.com/NuvioMedia/NuvioMobile). This repository only adds the Live TV layer.
+
+Nuvio is licensed under the GNU General Public License v3.0.
+
+[release-shield]: https://img.shields.io/github/v/release/dslayer6989/NuvioDesktop?style=for-the-badge&label=latest%20release
+[release-url]: https://github.com/dslayer6989/NuvioDesktop/releases
+[build-shield]: https://img.shields.io/github/actions/workflow/status/dslayer6989/NuvioDesktop/live-tv-build.yml?style=for-the-badge&label=build
+[build-url]: https://github.com/dslayer6989/NuvioDesktop/actions/workflows/live-tv-build.yml
+[license-shield]: https://img.shields.io/github/license/dslayer6989/NuvioDesktop.svg?style=for-the-badge
+[license-url]: https://github.com/dslayer6989/NuvioDesktop/blob/main/LICENSE
