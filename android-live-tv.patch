@@ -14,37 +14,6 @@ index e126f59..da06352 100644
          minSdk = libs.versions.android.minSdk.get().toInt()
          targetSdk = libs.versions.android.targetSdk.get().toInt()
          versionCode = releaseAppVersionCode
-diff --git a/androidApp/src/main/AndroidManifest.xml b/androidApp/src/main/AndroidManifest.xml
-index ee95ef0..8110f28 100644
---- a/androidApp/src/main/AndroidManifest.xml
-+++ b/androidApp/src/main/AndroidManifest.xml
-@@ -1,6 +1,10 @@
- <?xml version="1.0" encoding="utf-8"?>
- <manifest xmlns:android="http://schemas.android.com/apk/res/android">
- 
-+    <!-- Installs on Android TV too; phones and tablets are unaffected. -->
-+    <uses-feature android:name="android.software.leanback" android:required="false" />
-+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
-+
-     <uses-permission android:name="android.permission.INTERNET" />
-     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-@@ -72,6 +76,7 @@
- 
-         <activity
-             android:name="com.nuvio.app.launcher.AppIconDefault"
-+            android:banner="@drawable/live_tv_banner"
-             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
-             android:enabled="true"
-             android:exported="true"
-@@ -82,6 +87,7 @@
-             <intent-filter>
-                 <action android:name="android.intent.action.MAIN" />
-                 <category android:name="android.intent.category.LAUNCHER" />
-+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-             </intent-filter>
-         </activity>
- 
 diff --git a/androidApp/src/release/res/values/strings.xml b/androidApp/src/release/res/values/strings.xml
 new file mode 100644
 index 0000000..8bc40b6
@@ -157,30 +126,6 @@ index 0000000..237374b
 +        return Instant.ofEpochMilli(epochMs).atZone(zone).toLocalDate().atStartOfDay(zone).toInstant().toEpochMilli()
 +    }
 +}
-diff --git a/composeApp/src/androidMain/res/drawable/live_tv_banner.xml b/composeApp/src/androidMain/res/drawable/live_tv_banner.xml
-new file mode 100644
-index 0000000..cb96287
---- /dev/null
-+++ b/composeApp/src/androidMain/res/drawable/live_tv_banner.xml
-@@ -0,0 +1,18 @@
-+<?xml version="1.0" encoding="utf-8"?>
-+<!-- Android TV launcher banner (320x180dp): the app icon on a dark tile. -->
-+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-+    <item>
-+        <shape android:shape="rectangle">
-+            <gradient
-+                android:angle="0"
-+                android:endColor="#FF1A1A1A"
-+                android:startColor="#FF0D0D0D" />
-+            <size android:width="320dp" android:height="180dp" />
-+        </shape>
-+    </item>
-+    <item
-+        android:width="150dp"
-+        android:height="150dp"
-+        android:drawable="@mipmap/ic_launcher_foreground"
-+        android:gravity="center" />
-+</layer-list>
 diff --git a/composeApp/src/commonMain/composeResources/files/licenses/theme-fonts/audiowide-OFL.txt b/composeApp/src/commonMain/composeResources/files/licenses/theme-fonts/audiowide-OFL.txt
 new file mode 100644
 index 0000000..19bb4ad
