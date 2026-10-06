@@ -4,7 +4,9 @@ and phone_cleanup.py applied: the TV launcher entry and banner, TV detection, an
 Usage: python3 edit_tv.py <root of the Nuvio Mobile checkout>
 Safe to run twice. Stops with an error if the code it expects is not there.
 
-The TV flag lives in androidMain, so the Windows build (which compiles commonMain) is untouched.
+LiveTvTelevision is an expect/actual pair: the expect object lives in commonMain (so the guide code
+there can read it), the Android actual carries the Android-only apply(context), and desktopMain and
+iosMain get no-op actuals so KMP metadata validation passes for every target.
 """
 import pathlib
 import sys
@@ -13,8 +15,13 @@ ROOT = pathlib.Path(sys.argv[1])
 LIVETV = ROOT / "composeApp/src/commonMain/kotlin/com/nuvio/app/features/livetv"
 GRID = LIVETV / "LiveTvGuideGrid.kt"
 SCREEN = LIVETV / "LiveTvScreen.kt"
+EXPECT = LIVETV / "LiveTvTelevision.kt"
 ANDROID_LIVETV = ROOT / "composeApp/src/androidMain/kotlin/com/nuvio/app/features/livetv"
 DETECT = ANDROID_LIVETV / "LiveTvTelevision.android.kt"
+DESKTOP_LIVETV = ROOT / "composeApp/src/desktopMain/kotlin/com/nuvio/app/features/livetv"
+DESKTOP = DESKTOP_LIVETV / "LiveTvTelevision.desktop.kt"
+IOS_LIVETV = ROOT / "composeApp/src/iosMain/kotlin/com/nuvio/app/features/livetv"
+IOS = IOS_LIVETV / "LiveTvTelevision.ios.kt"
 MANIFEST = ROOT / "androidApp/src/main/AndroidManifest.xml"
 BANNER = ROOT / "composeApp/src/androidMain/res/drawable/live_tv_banner.xml"
 MAIN_ACTIVITY = ROOT / "composeApp/src/androidMain/kotlin/com/nuvio/app/MainActivity.kt"
@@ -45,7 +52,31 @@ def replace_once(text, old, new, what):
     return text.replace(old, new)
 
 
-# ---------------------------------------------------------------- TV detection (androidMain only)
+# ---------------------------------------------------------------- TV detection: expect in commonMain
+EXPECT_SOURCE = """package com.nuvio.app.features.livetv
+
+/**
+ * Whether this device is a television: Android TV, Google TV or Fire TV.
+ *
+ * The guide code in commonMain reads these two flags to pick the couch-distance layout. Only the
+ * Android actual can answer them; every other target reports false, so the phone and desktop
+ * layouts are unchanged there.
+ */
+internal expect object LiveTvTelevision {
+    val isTelevision: Boolean
+
+    /** Fire TV does not show app-provided home screen rows, so those are skipped there. */
+    val isFireTv: Boolean
+}
+"""
+
+if EXPECT.exists():
+    print("TV expect object already present: " + EXPECT.name)
+else:
+    write(EXPECT, EXPECT_SOURCE)
+    print("Added " + EXPECT.name)
+
+# ---------------------------------------------------------------- TV detection: Android actual
 DETECT_SOURCE = """package com.nuvio.app.features.livetv
 
 import android.app.UiModeManager
@@ -54,22 +85,24 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 
 /**
- * Whether this device is a television: Android TV, Google TV or Fire TV.
- *
- * All three report the television UI mode. Some boxes only declare the leanback feature, and Fire TV
- * devices also declare their own feature, so any of the three counts. Never throws: if the system
- * cannot be asked, the app keeps its normal phone layout.
+ * Android TV, Google TV and Fire TV all report the television UI mode. Some boxes only declare the
+ * leanback feature, and Fire TV devices also declare their own feature, so any of the three counts.
+ * Never throws: if the system cannot be asked, the app keeps its normal phone layout.
  */
-internal object LiveTvTelevision {
+internal actual object LiveTvTelevision {
     @Volatile
-    var isTelevision: Boolean = false
-        private set
+    private var television: Boolean = false
 
-    /** Fire TV does not show app-provided home screen rows, so those are skipped there. */
     @Volatile
-    var isFireTv: Boolean = false
-        private set
+    private var fireTv: Boolean = false
 
+    actual val isTelevision: Boolean
+        get() = television
+
+    actual val isFireTv: Boolean
+        get() = fireTv
+
+    /** Called once from MainActivity, before the UI is composed. */
     fun apply(context: Context) {
         val result = runCatching {
             val uiMode = context.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
@@ -79,8 +112,8 @@ internal object LiveTvTelevision {
                 pm.hasSystemFeature(FireTvFeature)
             television to pm.hasSystemFeature(FireTvFeature)
         }.getOrNull()
-        isTelevision = result?.first ?: false
-        isFireTv = result?.second ?: false
+        television = result?.first ?: false
+        fireTv = result?.second ?: false
     }
 
     private const val FireTvFeature = "amazon.hardware.fire_tv"
@@ -92,6 +125,29 @@ if DETECT.exists():
 else:
     write(DETECT, DETECT_SOURCE)
     print("Added " + DETECT.name)
+
+# ---------------------------------------------------------------- TV detection: desktop and iOS no-ops
+NOOP_SOURCE = """package com.nuvio.app.features.livetv
+
+/** Not a television: the desktop build keeps its normal layout. */
+internal actual object LiveTvTelevision {
+    actual val isTelevision: Boolean = false
+
+    actual val isFireTv: Boolean = false
+}
+"""
+
+if DESKTOP.exists():
+    print("Desktop no-op already present: " + DESKTOP.name)
+else:
+    write(DESKTOP, NOOP_SOURCE)
+    print("Added " + DESKTOP.name)
+
+if IOS.exists():
+    print("iOS no-op already present: " + IOS.name)
+else:
+    write(IOS, NOOP_SOURCE)
+    print("Added " + IOS.name)
 
 text, crlf = read(MAIN_ACTIVITY)
 if "LiveTvTelevision.apply" in text:
