@@ -1,32 +1,40 @@
 name: Build Nuvio Live TV
 
-# Builds the Windows installer and the Android APKs from the patches in this repository, then
-# publishes them as one release. Run it by hand from the Actions tab, or let a push to Dev or main
-# start it. The patches are applied to the official Nuvio source at the commits pinned below.
+# Builds three apps and publishes them together as a GitHub Release:
+#   - Windows installer: the official Nuvio Desktop source + windows-live-tv.patch from this repository
+#   - Android APKs: the official Nuvio Mobile source + android-live-tv.patch from this repository
+#   - Android TV APK: the official Nuvio Mobile source + android-tv-live-tv.patch from this repository
+# To update the apps, replace the .patch files; the other files in this repository aren't used.
 
 on:
   workflow_dispatch:
   push:
-    branches: [Dev, main, custom/live-tv-neon]
-    paths:
-      - "windows-live-tv.patch"
-      - "android-live-tv.patch"
-      - "android-tv-live-tv.patch"
-      - ".github/workflows/live-tv-build.yml"
+    branches:
+      - Dev
+      - main
+      - custom/live-tv-neon
+    paths-ignore:
+      - "**.md"
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
 
 concurrency:
   group: live-tv-build
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
-  NUVIO_DESKTOP_COMMIT: b1e00724c55e65f8f325d4d9d52eb6827872a7c2
-  NUVIO_MOBILE_COMMIT: c1065d0a2a717d7dba445257f064f3fb8d1b30a3
-  NUVIO_API_URL: https://api.nuvio.tv
-  NUVIO_API_KEY: sb_publishable_1Clq8rlTVACkdcZuqr6_AD__xUUC_EN
+  # Newest Gradle release (see gradle.org/releases). Set to "" to use the version the source code pins.
   LATEST_GRADLE: "9.8.0"
+  # The exact Nuvio Desktop source that windows-live-tv.patch was made for.
+  NUVIO_DESKTOP_COMMIT: b1e00724c55e65f8f325d4d9d52eb6827872a7c2
+  # The exact Nuvio Mobile source that android-live-tv.patch and android-tv-live-tv.patch were made for.
+  NUVIO_MOBILE_COMMIT: c1065d0a2a717d7dba445257f064f3fb8d1b30a3
+  # The WebView2 SDK the desktop build needs. The build fails without it.
+  WEBVIEW2_VERSION: "1.0.4078.44"
 
 jobs:
   android:
@@ -265,6 +273,9 @@ jobs:
   windows:
     name: Windows installer
     runs-on: windows-2022
+    env:
+      KEYSTORE_BASE64: ${{ secrets.LIVE_TV_KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.LIVE_TV_KEYSTORE_PASSWORD }}
     steps:
       - name: Get the Live TV patch from this repository
         uses: actions/checkout@v6
@@ -283,23 +294,47 @@ jobs:
 
       - name: Add Live TV to the desktop app
         working-directory: desktop
-        shell: bash
+        shell: pwsh
         run: |
-          patch_file="${GITHUB_WORKSPACE}/fork/windows-live-tv.patch"
-          if [[ ! -f "${patch_file}" ]]; then
-            echo "::error::windows-live-tv.patch was not found. Upload it to the top level of your repository (next to README.md), then run this build again."
+          $patchFile = Join-Path $env:GITHUB_WORKSPACE "fork/windows-live-tv.patch"
+          if (-not (Test-Path $patchFile)) {
+            Write-Error "windows-live-tv.patch was not found. Upload it to the top level of your repository (next to README.md), then run this build again."
             exit 1
-          fi
-          git apply --whitespace=nowarn "${patch_file}" || git apply --ignore-whitespace --whitespace=nowarn "${patch_file}"
-          echo "Live TV added: $(git status --short | wc -l) files changed."
+          }
+          git apply --whitespace=nowarn $patchFile
+          if ($LASTEXITCODE -ne 0) {
+            git apply --ignore-whitespace --whitespace=nowarn $patchFile
+          }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "windows-live-tv.patch did not apply."
+            exit 1
+          }
+          Write-Host "Live TV added: $((git status --short | Measure-Object -Line).Lines) files changed."
+
+      - name: Install the WebView2 SDK
+        shell: pwsh
+        run: |
+          $nuget = Join-Path $env:RUNNER_TEMP "nuget.exe"
+          Invoke-WebRequest -Uri "https://dist.nuget.org/win-x86-commandline/latest/nuget.exe" -OutFile $nuget
+          $packages = Join-Path $env:RUNNER_TEMP "webview2"
+          New-Item -ItemType Directory -Force -Path $packages | Out-Null
+          & $nuget install "Microsoft.Web.WebView2" -Version $env:WEBVIEW2_VERSION -OutputDirectory $packages -NonInteractive
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Could not download the WebView2 SDK."
+            exit 1
+          }
+          $root = Join-Path $packages "Microsoft.Web.WebView2.$env:WEBVIEW2_VERSION"
+          "WEBVIEW2_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "WebView2 SDK at $root"
 
       - name: Use the latest Gradle
         if: ${{ env.LATEST_GRADLE != '' }}
         working-directory: desktop
-        shell: bash
+        shell: pwsh
         run: |
-          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${LATEST_GRADLE}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
-          grep distributionUrl gradle/wrapper/gradle-wrapper.properties
+          $file = "gradle/wrapper/gradle-wrapper.properties"
+          (Get-Content $file) -replace "gradle-[0-9][0-9.]*-(bin|all)\.zip", "gradle-$env:LATEST_GRADLE-`$1.zip" | Set-Content $file
+          Select-String -Path $file -Pattern "distributionUrl"
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -310,29 +345,45 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
+      - name: Prepare sign-in settings
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          @(
+            "NUVIO_SUPABASE_URL=$env:NUVIO_API_URL"
+            "NUVIO_SUPABASE_ANON_KEY=$env:NUVIO_API_KEY"
+          ) | Out-File -FilePath "local.properties" -Encoding utf8
+
       - name: Build the installer
         working-directory: desktop
-        shell: bash
+        shell: pwsh
         run: |
-          args=(:composeApp:packageMsi -Pnuvio.desktop.versionName=0.1.$((9000 + GITHUB_RUN_NUMBER)) --stacktrace)
-          if ./gradlew "${args[@]}"; then
-            exit 0
-          fi
-          if [[ -z "${LATEST_GRADLE}" ]]; then
-            exit 1
-          fi
-          echo "::warning::The build failed with Gradle ${LATEST_GRADLE}; trying again with the Gradle version the source code pins."
-          ./gradlew --stop || true
+          $args = @(
+            ":composeApp:packageReleaseMsi"
+            "-Pnuvio.desktop.versionName=0.1.$((9000 + [int]$env:GITHUB_RUN_NUMBER))"
+            "-Pnuvio.webview2.dir=$env:WEBVIEW2_ROOT"
+            "-Pcompose.desktop.packaging.checkJdkVendor=false"
+            "--stacktrace"
+          )
+          & ./gradlew @args
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          if (-not $env:LATEST_GRADLE) { exit 1 }
+          Write-Warning "The build failed with Gradle $env:LATEST_GRADLE; trying again with the Gradle version the source code pins."
+          & ./gradlew --stop
           git checkout -- gradle/wrapper/gradle-wrapper.properties
-          ./gradlew "${args[@]}"
+          & ./gradlew @args
 
       - name: Collect the installer
-        shell: bash
+        shell: pwsh
         run: |
-          mkdir -p out
-          msi="$(ls desktop/composeApp/build/compose/binaries/main/msi/*.msi | head -n 1)"
-          cp "${msi}" out/Nuvio-LiveTV-Windows.msi
-          ls -la out
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          $msi = Get-ChildItem -Path "desktop/composeApp/build/compose/release-msis/*.msi" | Select-Object -First 1
+          if (-not $msi) {
+            Write-Error "No MSI was produced under desktop/composeApp/build/compose/release-msis."
+            exit 1
+          }
+          Copy-Item $msi.FullName "out/Nuvio-LiveTV-Windows.msi"
+          Get-ChildItem out
 
       - name: Upload the installer
         uses: actions/upload-artifact@v7
