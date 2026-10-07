@@ -342,6 +342,49 @@ jobs:
           "WEBVIEW2_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "WebView2 SDK at $root"
 
+      # The desktop player is a native MPV surface. The MSI ships without
+      # libmpv-2.dll unless the runtime is downloaded and passed to Gradle, and
+      # without it NativePlayerBridge.create() throws "Unable to load
+      # libmpv-2.dll" and every playback path strands on a black player surface.
+      # Resolve the latest asset dynamically: the mpv-dev-x86_64-*.7z filename
+      # changes every build, so a hardcoded URL is brittle.
+      - name: Install the MPV runtime
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $mpvDir = Join-Path $env:RUNNER_TEMP "mpv"
+          New-Item -ItemType Directory -Force -Path $mpvDir | Out-Null
+
+          Write-Host "Downloading latest mpv-dev-x86_64 archive from zhongfly/mpv-winbuild..."
+          gh release download --repo zhongfly/mpv-winbuild --pattern "mpv-dev-x86_64-*.7z" --dir $mpvDir
+
+          $archive = Get-ChildItem -Path $mpvDir -Filter "mpv-dev-x86_64-*.7z" |
+            Where-Object { $_.Name -notmatch 'v3' } |
+            Select-Object -First 1
+
+          if (-not $archive) {
+            Write-Error "Failed to locate downloaded mpv-dev archive."
+            exit 1
+          }
+
+          Write-Host "Extracting $($archive.FullName)..."
+          & 7z x $archive.FullName "-o$mpvDir" -y
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to extract MPV archive."
+            exit 1
+          }
+
+          $dll = Get-ChildItem -Path $mpvDir -Recurse -Filter "libmpv-2.dll" | Select-Object -First 1
+          if (-not $dll) {
+            Write-Error "libmpv-2.dll was not found after extraction."
+            exit 1
+          }
+
+          $runtimeDir = $dll.DirectoryName
+          Write-Host "Found libmpv-2.dll in $runtimeDir"
+          "MPV_RUNTIME_DIR=$runtimeDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Look up the latest Gradle version
         id: gradle
         shell: pwsh
@@ -392,6 +435,7 @@ jobs:
             ":composeApp:packageReleaseMsi"
             "-Pnuvio.desktop.versionName=0.1.$((9000 + [int]$env:GITHUB_RUN_NUMBER))"
             "-Pnuvio.webview2.dir=$env:WEBVIEW2_ROOT"
+            "-Pnuvio.windows.libmpv.runtimeDir=$env:MPV_RUNTIME_DIR"
             "-Pcompose.desktop.packaging.checkJdkVendor=false"
             "--stacktrace"
           )
