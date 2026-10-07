@@ -33,6 +33,10 @@ env:
   NUVIO_MOBILE_COMMIT: c1065d0a2a717d7dba445257f064f3fb8d1b30a3
   # The WebView2 SDK the desktop build needs. The build fails without it.
   WEBVIEW2_VERSION: "1.0.4078.44"
+  # The Windows MPV runtime the desktop player needs. The MSI ships without
+  # libmpv-2.dll unless this is downloaded and passed to Gradle, and without it
+  # every playback path strands on a black player surface.
+  MPV_WINDOWS_URL: "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20250101/mpv-dev-x86_64-20250101-git-6b1a1e0.7z"
   # The Gradle version to fall back to if the newest release does not work. The build jobs try the
   # newest Gradle first and retry with this pinned version if that fails.
   FALLBACK_GRADLE: "9.8.0"
@@ -342,6 +346,37 @@ jobs:
           "WEBVIEW2_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "WebView2 SDK at $root"
 
+      # The desktop player is a native MPV surface. The MSI ships without
+      # libmpv-2.dll unless the runtime is downloaded and passed to Gradle, and
+      # without it NativePlayerBridge.create() throws "Unable to load
+      # libmpv-2.dll" and every playback path strands on a black player surface.
+      - name: Install the MPV runtime
+        shell: pwsh
+        run: |
+          $runtime = Join-Path $env:RUNNER_TEMP "mpv-runtime"
+          New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+          $archive = Join-Path $env:RUNNER_TEMP "mpv.7z"
+          Invoke-WebRequest -Uri $env:MPV_WINDOWS_URL -OutFile $archive
+          # 7z is preinstalled on windows-2022 runners.
+          & 7z x $archive "-o$runtime" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Could not extract the MPV runtime archive."
+            exit 1
+          }
+          # The archive nests the DLLs in a subdirectory; flatten them so
+          # libmpv-2.dll sits directly in the runtime dir Gradle copies from.
+          Get-ChildItem -Path $runtime -Recurse -Filter "*.dll" | ForEach-Object {
+            Copy-Item $_.FullName -Destination (Join-Path $runtime $_.Name) -Force
+          }
+          $libmpv = Join-Path $runtime "libmpv-2.dll"
+          if (-not (Test-Path $libmpv)) {
+            Write-Error "libmpv-2.dll was not found after extracting the MPV runtime. Check MPV_WINDOWS_URL."
+            exit 1
+          }
+          "MPV_RUNTIME_DIR=$runtime" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "MPV runtime at $runtime"
+          Get-ChildItem $runtime -Filter "*.dll" | Select-Object Name, Length | Format-Table -AutoSize
+
       - name: Look up the latest Gradle version
         id: gradle
         shell: pwsh
@@ -392,6 +427,7 @@ jobs:
             ":composeApp:packageReleaseMsi"
             "-Pnuvio.desktop.versionName=0.1.$((9000 + [int]$env:GITHUB_RUN_NUMBER))"
             "-Pnuvio.webview2.dir=$env:WEBVIEW2_ROOT"
+            "-Pnuvio.windows.libmpv.runtimeDir=$env:MPV_RUNTIME_DIR"
             "-Pcompose.desktop.packaging.checkJdkVendor=false"
             "--stacktrace"
           )
