@@ -31,6 +31,11 @@ env:
   NUVIO_DESKTOP_COMMIT: b1e00724c55e65f8f325d4d9d52eb6827872a7c2
   # The exact Nuvio Mobile source that android-live-tv.patch and android-tv-live-tv.patch were made for.
   NUVIO_MOBILE_COMMIT: c1065d0a2a717d7dba445257f064f3fb8d1b30a3
+  # Nuvio's public account server, from nuvio.tv/docs#base-urls. Lets you sign in with your Nuvio account.
+  # These MUST stay defined: all three jobs write them into local.properties as
+  # NUVIO_SUPABASE_URL / NUVIO_SUPABASE_ANON_KEY, and empty values break every sign-in path.
+  NUVIO_API_URL: https://api.nuvio.tv
+  NUVIO_API_KEY: sb_publishable_1Clq8rlTVACkdcZuqr6_AD__xUUC_EN
   # The WebView2 SDK the desktop build needs. The build fails without it.
   WEBVIEW2_VERSION: "1.0.4078.44"
   # The Gradle version to fall back to if the newest release does not work. The build jobs try the
@@ -103,6 +108,10 @@ jobs:
       - name: Prepare sign-in settings and signing key
         working-directory: mobile
         run: |
+          if [[ -z "${NUVIO_API_URL}" || -z "${NUVIO_API_KEY}" ]]; then
+            echo "::error::NUVIO_API_URL / NUVIO_API_KEY are empty; sign-in would be built pointing at localhost. Refusing to build."
+            exit 1
+          fi
           keystore="${RUNNER_TEMP}/live-tv.jks"
           if [[ -n "${KEYSTORE_BASE64}" && -n "${KEYSTORE_PASSWORD}" ]]; then
             printf '%s' "${KEYSTORE_BASE64}" | base64 --decode > "${keystore}"
@@ -234,6 +243,10 @@ jobs:
       - name: Prepare sign-in settings and signing key
         working-directory: mobile
         run: |
+          if [[ -z "${NUVIO_API_URL}" || -z "${NUVIO_API_KEY}" ]]; then
+            echo "::error::NUVIO_API_URL / NUVIO_API_KEY are empty; sign-in would be built pointing at localhost. Refusing to build."
+            exit 1
+          fi
           keystore="${RUNNER_TEMP}/live-tv.jks"
           if [[ -n "${KEYSTORE_BASE64}" && -n "${KEYSTORE_PASSWORD}" ]]; then
             printf '%s' "${KEYSTORE_BASE64}" | base64 --decode > "${keystore}"
@@ -422,6 +435,10 @@ jobs:
         working-directory: desktop
         shell: pwsh
         run: |
+          if (-not $env:NUVIO_API_URL -or -not $env:NUVIO_API_KEY) {
+            Write-Error "NUVIO_API_URL / NUVIO_API_KEY are empty; sign-in would be built pointing at localhost. Refusing to build."
+            exit 1
+          }
           @(
             "NUVIO_SUPABASE_URL=$env:NUVIO_API_URL"
             "NUVIO_SUPABASE_ANON_KEY=$env:NUVIO_API_KEY"
