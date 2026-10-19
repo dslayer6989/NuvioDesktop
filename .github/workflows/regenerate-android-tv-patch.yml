@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  NUVIO_MOBILE_COMMIT: c1065d0a2a717d7dba445257f064f3fb8d1b30a3
+  NUVIO_MOBILE_COMMIT: 324afcffb962f1f7df45c5fa951131acec5a15a7
 
 jobs:
   regenerate:

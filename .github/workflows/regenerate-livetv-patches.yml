@@ -16,8 +16,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  NUVIO_DESKTOP_COMMIT: b1e00724c55e65f8f325d4d9d52eb6827872a7c2
-  NUVIO_MOBILE_COMMIT: c1065d0a2a717d7dba445257f064f3fb8d1b30a3
+  NUVIO_DESKTOP_COMMIT: e808a584e937d3ce148f5e023180586bc3545002
+  NUVIO_MOBILE_COMMIT: 324afcffb962f1f7df45c5fa951131acec5a15a7
   NUVIO_API_URL: https://api.nuvio.tv
   NUVIO_API_KEY: sb_publishable_1Clq8rlTVACkdcZuqr6_AD__xUUC_EN
 
