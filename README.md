@@ -39,9 +39,9 @@ Each patch is applied to a **pinned commit** of the official Nuvio source, so a 
 
 | Target | Official source | Pinned commit |
 | --- | --- | --- |
-| Windows MSI | [`NuvioMedia/NuvioDesktop`](https://github.com/NuvioMedia/NuvioDesktop) | `b1e0072` |
-| Android phone APKs | [`NuvioMedia/NuvioMobile`](https://github.com/NuvioMedia/NuvioMobile) | `c1065d0` |
-| Android TV APK | [`NuvioMedia/NuvioMobile`](https://github.com/NuvioMedia/NuvioMobile) | `c1065d0` |
+| Windows MSI | [`NuvioMedia/NuvioDesktop`](https://github.com/NuvioMedia/NuvioDesktop) | `e808a58` |
+| Android phone APKs | [`NuvioMedia/NuvioMobile`](https://github.com/NuvioMedia/NuvioMobile) | `324afcf` |
+| Android TV APK | [`NuvioMedia/NuvioMobile`](https://github.com/NuvioMedia/NuvioMobile) | `324afcf` |
 
 Because the apps are built from Nuvio's own source, everything Nuvio does — browsing, metadata, addons, playback, tracking — works exactly as it does upstream. Live TV is the only addition.
 
