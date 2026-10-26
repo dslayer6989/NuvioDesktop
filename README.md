@@ -11,7 +11,7 @@
   <p>
     <strong>Nuvio Live TV</strong> — a patch-based distribution that adds a Live TV guide to Nuvio.
     <br />
-    Windows desktop, Android phones and tablets, and Android TV, Google TV and Fire TV.
+    Windows desktop. Android phones and iPhones/iPads are built in [`NuvioMobile`](https://github.com/dslayer6989/NuvioMobile), and Android TV in [`NuvioTV`](https://github.com/dslayer6989/NuvioTV).
   </p>
 
 </div>
@@ -31,8 +31,6 @@ The repository contains three patch files and one build workflow. Nothing else s
 | File | What it does |
 | --- | --- |
 | `windows-live-tv.patch` | Adds Live TV to the official Nuvio Desktop app |
-| `android-live-tv.patch` | Adds Live TV to the official Nuvio Mobile app (phones and tablets) |
-| `android-tv-live-tv.patch` | Adds Live TV **and** the Android TV layer (TV launcher entry, banner, couch-distance guide layout) |
 | `.github/workflows/live-tv-build.yml` | Applies the patches to the official source and publishes the installers |
 
 Each patch is applied to a **pinned commit** of the official Nuvio source, so a build is always reproducible:
@@ -40,8 +38,6 @@ Each patch is applied to a **pinned commit** of the official Nuvio source, so a 
 | Target | Official source | Pinned commit |
 | --- | --- | --- |
 | Windows MSI | [`NuvioMedia/NuvioDesktop`](https://github.com/NuvioMedia/NuvioDesktop) | `e808a58` |
-| Android phone APKs | [`NuvioMedia/NuvioMobile`](https://github.com/NuvioMedia/NuvioMobile) | `324afcf` |
-| Android TV APK | [`NuvioMedia/NuvioMobile`](https://github.com/NuvioMedia/NuvioMobile) | `324afcf` |
 
 Because the apps are built from Nuvio's own source, everything Nuvio does — browsing, metadata, addons, playback, tracking — works exactly as it does upstream. Live TV is the only addition.
 
@@ -53,23 +49,10 @@ Because the apps are built from Nuvio's own source, everything Nuvio does — br
 - **Source memory** — when a channel has several streams, the app remembers the last one that worked and tries it first next time.
 - **Backup streams** — if a stream fails, the player advances to the next source automatically.
 - **Profiles** — Live TV settings are stored per profile, alongside the rest of your Nuvio settings.
-- **A TV layout** — on Android TV, Google TV and Fire TV the guide switches to a couch-distance layout with larger rows, larger text, and a thicker focus highlight, navigated with the remote's D-pad.
 
 ## Download and install
 
-Get the newest build from the [Releases page][release-url]. Every release contains all three apps.
-
-### Android phone and tablet
-
-Download **`Nuvio-LiveTV-Android-phone.apk`**, open it, and allow installing from this source when asked.
-
-It installs next to the official Nuvio app as **Nuvio Live TV**. The `older-32bit`, `x86` and `x86_64` files are for unusual devices; most phones want the `phone` file.
-
-### Android TV, Google TV and Fire TV
-
-Download **`Nuvio-LiveTV-Android-TV.apk`** and install it on the TV.
-
-It installs next to the official Nuvio app as **Nuvio Live TV**, with a TV launcher entry and the couch-distance guide layout. Fire TV does not show app-provided home screen rows, so those are skipped there.
+Get the newest build from the [Releases page][release-url]. Releases here contain the Windows installer. Android phones and iPhones/iPads: use the releases of [`dslayer6989/NuvioMobile`](https://github.com/dslayer6989/NuvioMobile). Android TV: use the releases of [`dslayer6989/NuvioTV`](https://github.com/dslayer6989/NuvioTV).
 
 ### Windows desktop
 
@@ -93,9 +76,9 @@ The build runs entirely in GitHub Actions. To produce a release:
 2. Choose **Build Nuvio Live TV**.
 3. Press **Run workflow**.
 
-The workflow checks out the official Nuvio source at the pinned commits, applies the patches, builds the Windows installer and the Android APKs, and publishes them as one release tagged `live-tv-build-N`.
+The workflow checks out the official Nuvio source at the pinned commit, applies the patches, builds the Windows installer, and publishes it as a release tagged `live-tv-build-N`.
 
-You can also let a push to `Dev` or `main` start a build. Pushing a change to any of the three patch files triggers it automatically.
+You can also let a push to `Dev` or `main` start a build. Pushing a change to the patch file triggers it automatically.
 
 ## Updating the Live TV feature
 
@@ -104,10 +87,8 @@ The patches are generated, not hand-edited. The generator scripts live in `.gith
 | Script | What it edits |
 | --- | --- |
 | `edit_livetv.py` | The shared Live TV feature (guide, repository, playback, settings) |
-| `phone_cleanup.py` | Removes the TV launcher entries from the phone build |
-| `edit_tv.py` | Adds the Android TV layer on top of the phone build |
 
-To change the feature, edit the relevant script, then run **Regenerate Live TV patches** followed by **Publish regenerated Live TV patches**. For TV changes, run **Regenerate Android TV patch** followed by **Publish regenerated Android TV patch**. Each regenerate run applies the edits, runs the Live TV tests, and only offers the new patches if the tests pass.
+To change the feature, edit the relevant script, then run **Regenerate Live TV patches** followed by **Publish regenerated Live TV patches**. Each regenerate run applies the edits, runs the Live TV tests, and only offers the new patch if the tests pass.
 
 ## Notes and limitations
 
@@ -118,7 +99,7 @@ To change the feature, edit the relevant script, then run **Regenerate Live TV p
 
 ## Credits
 
-Nuvio Live TV is built on the work of the Nuvio project. All app code, design and features come from [`NuvioMedia/NuvioDesktop`](https://github.com/NuvioMedia/NuvioDesktop) and [`NuvioMedia/NuvioMobile`](https://github.com/NuvioMedia/NuvioMobile). This repository only adds the Live TV layer.
+Nuvio Live TV is built on the work of the Nuvio project. All app code, design and features come from [`NuvioMedia/NuvioDesktop`](https://github.com/NuvioMedia/NuvioDesktop). This repository only adds the Live TV layer.
 
 Nuvio is licensed under the GNU General Public License v3.0.
 
