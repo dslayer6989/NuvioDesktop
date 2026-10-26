@@ -2,8 +2,8 @@ name: Publish regenerated Live TV patches
 
 # Run by hand: Actions tab > Publish regenerated Live TV patches > Run workflow (branch: Dev).
 # Give it the run ID of a green "Regenerate Live TV patches" run (the number at the end of that run's
-# address). It copies that run's two tested .patch files onto the Dev branch in a single commit.
-# It refuses to run on any branch other than Dev, and it only touches the two patch files.
+# address). It copies that run's tested .patch file onto the Dev branch in a single commit.
+# It refuses to run on any branch other than Dev, and it only touches the Windows patch file.
 
 on:
   workflow_dispatch:
@@ -57,7 +57,6 @@ jobs:
         with:
           sparse-checkout: |
             windows-live-tv.patch
-            android-live-tv.patch
           sparse-checkout-cone-mode: false
 
       - name: Download the tested patches from that run
@@ -71,7 +70,7 @@ jobs:
       - name: Check the patches and commit them to Dev
         run: |
           set -euo pipefail
-          for f in windows-live-tv.patch android-live-tv.patch; do
+          for f in windows-live-tv.patch; do
             if [[ ! -s "new/${f}" ]]; then
               echo "::error::${f} is missing or empty in the downloaded artifact."
               exit 1
@@ -89,10 +88,10 @@ jobs:
             done
             echo "${f}: $(wc -c < "new/${f}") bytes, $(wc -l < "${RUNNER_TEMP}/${f}.numstat") files, checks passed"
           done
-          cp new/windows-live-tv.patch new/android-live-tv.patch .
+          cp new/windows-live-tv.patch .
           git config user.name "ci"
           git config user.email "ci@users.noreply.github.com"
-          git add windows-live-tv.patch android-live-tv.patch
+          git add windows-live-tv.patch
           if git diff --cached --quiet; then
             echo "The patches on Dev are already identical to that run's patches. Nothing to commit."
             exit 0

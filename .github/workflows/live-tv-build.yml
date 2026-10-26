@@ -1,10 +1,9 @@
 name: Build Nuvio Live TV
 
-# Builds three apps and publishes them together as a GitHub Release:
+# Builds the Windows installer and publishes it as a GitHub Release:
 #   - Windows installer: the official Nuvio Desktop source + windows-live-tv.patch from this repository
-#   - Android APKs: the official Nuvio Mobile source + android-live-tv.patch from this repository
-#   - Android TV APK: the official Nuvio Mobile source + android-tv-live-tv.patch from this repository
-# To update the apps, replace the .patch files; the other files in this repository aren't used.
+# Android phones and iPhones/iPads are built in dslayer6989/NuvioMobile, and Android TV in
+# dslayer6989/NuvioTV. To update the Windows app, replace windows-live-tv.patch.
 
 on:
   workflow_dispatch:
@@ -28,9 +27,7 @@ concurrency:
 
 env:
   # The exact Nuvio Desktop source that windows-live-tv.patch was made for.
-  NUVIO_DESKTOP_COMMIT: b1e00724c55e65f8f325d4d9d52eb6827872a7c2
-  # The exact Nuvio Mobile source that android-live-tv.patch and android-tv-live-tv.patch were made for.
-  NUVIO_MOBILE_COMMIT: c1065d0a2a717d7dba445257f064f3fb8d1b30a3
+  NUVIO_DESKTOP_COMMIT: e808a584e937d3ce148f5e023180586bc3545002
   # Nuvio's public account server, from nuvio.tv/docs#base-urls. Lets you sign in with your Nuvio account.
   # These MUST stay defined: all three jobs write them into local.properties as
   # NUVIO_SUPABASE_URL / NUVIO_SUPABASE_ANON_KEY, and empty values break every sign-in path.
@@ -43,261 +40,6 @@ env:
   FALLBACK_GRADLE: "9.8.0"
 
 jobs:
-  android:
-    name: Android APK
-    runs-on: ubuntu-24.04
-    env:
-      KEYSTORE_BASE64: ${{ secrets.LIVE_TV_KEYSTORE_BASE64 }}
-      KEYSTORE_PASSWORD: ${{ secrets.LIVE_TV_KEYSTORE_PASSWORD }}
-    steps:
-      # Leave persist-credentials at its default for both checkouts. Nuvio's repositories list
-      # sub-projects (such as libass-android) without addresses, so git's submodule clean-up fails;
-      # with the default setting that happens after the build, as a harmless warning.
-      - name: Get the Live TV patch from this repository
-        uses: actions/checkout@v6
-        with:
-          path: fork
-          sparse-checkout: |
-            android-live-tv.patch
-          sparse-checkout-cone-mode: false
-
-      - name: Get the official Nuvio Mobile source
-        uses: actions/checkout@v6
-        with:
-          repository: NuvioMedia/NuvioMobile
-          ref: ${{ env.NUVIO_MOBILE_COMMIT }}
-          path: mobile
-
-      - name: Add Live TV to the Android app
-        working-directory: mobile
-        run: |
-          patch_file="${GITHUB_WORKSPACE}/fork/android-live-tv.patch"
-          if [[ ! -f "${patch_file}" ]]; then
-            echo "::error::android-live-tv.patch was not found. Upload it to the top level of your repository (next to README.md), then run this build again."
-            exit 1
-          fi
-          git apply --whitespace=nowarn "${patch_file}" || git apply --ignore-whitespace --whitespace=nowarn "${patch_file}"
-          echo "Live TV added: $(git status --short | wc -l) files changed."
-
-      - name: Look up the latest Gradle version
-        id: gradle
-        run: |
-          latest="$(curl -fsSL https://services.gradle.org/versions/current | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-          if [[ -z "${latest}" ]]; then
-            echo "::warning::Could not look up the latest Gradle version; using the pinned ${FALLBACK_GRADLE}."
-            latest="${FALLBACK_GRADLE}"
-          fi
-          echo "Using Gradle ${latest} (fallback ${FALLBACK_GRADLE})."
-          echo "version=${latest}" >> "${GITHUB_OUTPUT}"
-
-      - name: Use the latest Gradle
-        working-directory: mobile
-        run: |
-          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${{ steps.gradle.outputs.version }}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
-          grep distributionUrl gradle/wrapper/gradle-wrapper.properties
-
-      - name: Set up Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-
-      - name: Prepare sign-in settings and signing key
-        working-directory: mobile
-        run: |
-          if [[ -z "${NUVIO_API_URL}" || -z "${NUVIO_API_KEY}" ]]; then
-            echo "::error::NUVIO_API_URL / NUVIO_API_KEY are empty; sign-in would be built pointing at localhost. Refusing to build."
-            exit 1
-          fi
-          keystore="${RUNNER_TEMP}/live-tv.jks"
-          if [[ -n "${KEYSTORE_BASE64}" && -n "${KEYSTORE_PASSWORD}" ]]; then
-            printf '%s' "${KEYSTORE_BASE64}" | base64 --decode > "${keystore}"
-            password="${KEYSTORE_PASSWORD}"
-          else
-            echo "::warning::No LIVE_TV_KEYSTORE secrets set; using a one-off key. Installing a later build will require uninstalling this one first."
-            password="live-tv-$(date +%s)"
-            keytool -genkeypair -noprompt -keystore "${keystore}" -storepass "${password}" -keypass "${password}" \
-              -alias livetv -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Nuvio Live TV"
-          fi
-          {
-            echo "NUVIO_SUPABASE_URL=${NUVIO_API_URL}"
-            echo "NUVIO_SUPABASE_ANON_KEY=${NUVIO_API_KEY}"
-            echo "NUVIO_RELEASE_STORE_FILE=${keystore}"
-            echo "NUVIO_RELEASE_STORE_PASSWORD=${password}"
-            echo "NUVIO_RELEASE_KEY_ALIAS=livetv"
-            echo "NUVIO_RELEASE_KEY_PASSWORD=${password}"
-          } > local.properties
-
-      - name: Build APKs
-        working-directory: mobile
-        run: |
-          args=(:androidApp:assembleFullRelease -Pnuvio.android.distribution=full -Pnuvio.android.applicationId=com.nuvio.app.livetv --stacktrace)
-          if ./gradlew "${args[@]}"; then
-            exit 0
-          fi
-          # Safety net: if the newest Gradle is the problem, build once more with the pinned version.
-          echo "::warning::The build failed with Gradle ${{ steps.gradle.outputs.version }}; trying again with the pinned Gradle ${FALLBACK_GRADLE}."
-          ./gradlew --stop || true
-          pkill -f KotlinCompileDaemon || true
-          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${FALLBACK_GRADLE}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
-          ./gradlew "${args[@]}"
-
-      - name: Rename APKs
-        run: |
-          mkdir -p out
-          for apk in mobile/androidApp/build/outputs/apk/full/release/*.apk; do
-            name="$(basename "${apk}")"
-            case "${name}" in
-              *arm64-v8a*)   cp "${apk}" out/Nuvio-LiveTV-Android-phone.apk ;;
-              *armeabi-v7a*) cp "${apk}" out/Nuvio-LiveTV-Android-older-32bit.apk ;;
-              *x86_64*)      cp "${apk}" out/Nuvio-LiveTV-Android-x86_64.apk ;;
-              *x86*)         cp "${apk}" out/Nuvio-LiveTV-Android-x86.apk ;;
-              *)             cp "${apk}" "out/${name}" ;;
-            esac
-          done
-          ls -la out
-
-      - name: Upload APKs
-        uses: actions/upload-artifact@v7
-        with:
-          name: android
-          path: out/*.apk
-          if-no-files-found: error
-
-  android-tv:
-    name: Android TV APK
-    runs-on: ubuntu-24.04
-    env:
-      KEYSTORE_BASE64: ${{ secrets.LIVE_TV_KEYSTORE_BASE64 }}
-      KEYSTORE_PASSWORD: ${{ secrets.LIVE_TV_KEYSTORE_PASSWORD }}
-    steps:
-      # Leave persist-credentials at its default for both checkouts. Nuvio's repositories list
-      # sub-projects (such as libass-android) without addresses, so git's submodule clean-up fails;
-      # with the default setting that happens after the build, as a harmless warning.
-      - name: Get the Android TV patch from this repository
-        uses: actions/checkout@v6
-        with:
-          path: fork
-          sparse-checkout: |
-            android-tv-live-tv.patch
-          sparse-checkout-cone-mode: false
-
-      - name: Get the official Nuvio Mobile source
-        uses: actions/checkout@v6
-        with:
-          repository: NuvioMedia/NuvioMobile
-          ref: ${{ env.NUVIO_MOBILE_COMMIT }}
-          path: mobile
-
-      # android-tv-live-tv.patch is CUMULATIVE: it is a diff from the pinned commit to the final TV
-      # tree, so it already contains everything android-live-tv.patch does. Apply it on its own to a
-      # pristine checkout. Applying the phone patch first fails with "already exists in working
-      # directory" (this exact failure was hit in run 37484864323).
-      - name: Add the Android TV layer to the Android app
-        working-directory: mobile
-        run: |
-          patch_file="${GITHUB_WORKSPACE}/fork/android-tv-live-tv.patch"
-          if [[ ! -f "${patch_file}" ]]; then
-            echo "::error::android-tv-live-tv.patch was not found. Publish it from a green Regenerate Android TV patch run, then run this build again."
-            exit 1
-          fi
-          git apply --whitespace=nowarn "${patch_file}" || git apply --ignore-whitespace --whitespace=nowarn "${patch_file}"
-          echo "Android TV layer added: $(git status --short | wc -l) files changed."
-          # Guard against a silently empty or phone-only patch.
-          for marker in "LiveTvTelevision.kt" "live_tv_banner.xml" "LEANBACK_LAUNCHER"; do
-            if ! grep -q "${marker}" "${patch_file}"; then
-              echo "::error::android-tv-live-tv.patch does not contain ${marker}; it is not the Android TV patch."
-              exit 1
-            fi
-          done
-
-      - name: Look up the latest Gradle version
-        id: gradle
-        run: |
-          latest="$(curl -fsSL https://services.gradle.org/versions/current | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-          if [[ -z "${latest}" ]]; then
-            echo "::warning::Could not look up the latest Gradle version; using the pinned ${FALLBACK_GRADLE}."
-            latest="${FALLBACK_GRADLE}"
-          fi
-          echo "Using Gradle ${latest} (fallback ${FALLBACK_GRADLE})."
-          echo "version=${latest}" >> "${GITHUB_OUTPUT}"
-
-      - name: Use the latest Gradle
-        working-directory: mobile
-        run: |
-          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${{ steps.gradle.outputs.version }}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
-          grep distributionUrl gradle/wrapper/gradle-wrapper.properties
-
-      - name: Set up Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-
-      - name: Prepare sign-in settings and signing key
-        working-directory: mobile
-        run: |
-          if [[ -z "${NUVIO_API_URL}" || -z "${NUVIO_API_KEY}" ]]; then
-            echo "::error::NUVIO_API_URL / NUVIO_API_KEY are empty; sign-in would be built pointing at localhost. Refusing to build."
-            exit 1
-          fi
-          keystore="${RUNNER_TEMP}/live-tv.jks"
-          if [[ -n "${KEYSTORE_BASE64}" && -n "${KEYSTORE_PASSWORD}" ]]; then
-            printf '%s' "${KEYSTORE_BASE64}" | base64 --decode > "${keystore}"
-            password="${KEYSTORE_PASSWORD}"
-          else
-            echo "::warning::No LIVE_TV_KEYSTORE secrets set; using a one-off key. Installing a later build will require uninstalling this one first."
-            password="live-tv-$(date +%s)"
-            keytool -genkeypair -noprompt -keystore "${keystore}" -storepass "${password}" -keypass "${password}" \
-              -alias livetv -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Nuvio Live TV"
-          fi
-          {
-            echo "NUVIO_SUPABASE_URL=${NUVIO_API_URL}"
-            echo "NUVIO_SUPABASE_ANON_KEY=${NUVIO_API_KEY}"
-            echo "NUVIO_RELEASE_STORE_FILE=${keystore}"
-            echo "NUVIO_RELEASE_STORE_PASSWORD=${password}"
-            echo "NUVIO_RELEASE_KEY_ALIAS=livetv"
-            echo "NUVIO_RELEASE_KEY_PASSWORD=${password}"
-          } > local.properties
-
-      - name: Build the Android TV APK
-        working-directory: mobile
-        run: |
-          args=(:androidApp:assembleFullRelease -Pnuvio.android.distribution=full -Pnuvio.android.applicationId=com.nuvio.app.livetv.atv --stacktrace)
-          if ./gradlew "${args[@]}"; then
-            exit 0
-          fi
-          # Safety net: if the newest Gradle is the problem, build once more with the pinned version.
-          echo "::warning::The build failed with Gradle ${{ steps.gradle.outputs.version }}; trying again with the pinned Gradle ${FALLBACK_GRADLE}."
-          ./gradlew --stop || true
-          pkill -f KotlinCompileDaemon || true
-          sed -i -E "s#gradle-[0-9][0-9.]*-(bin|all)\.zip#gradle-${FALLBACK_GRADLE}-\1.zip#" gradle/wrapper/gradle-wrapper.properties
-          ./gradlew "${args[@]}"
-
-      - name: Rename the Android TV APK
-        run: |
-          mkdir -p out
-          # The TV build ships one universal APK so it installs on Android TV, Google TV and Fire TV.
-          apk="$(ls mobile/androidApp/build/outputs/apk/full/release/*universal*.apk 2>/dev/null | head -n 1)"
-          if [[ -z "${apk}" ]]; then
-            apk="$(ls mobile/androidApp/build/outputs/apk/full/release/*.apk | head -n 1)"
-          fi
-          cp "${apk}" out/Nuvio-LiveTV-Android-TV.apk
-          ls -la out
-
-      - name: Upload the Android TV APK
-        uses: actions/upload-artifact@v7
-        with:
-          name: android-tv
-          path: out/Nuvio-LiveTV-Android-TV.apk
-          if-no-files-found: error
-
   windows:
     name: Windows installer
     runs-on: windows-2022
@@ -481,8 +223,8 @@ jobs:
 
   publish:
     name: Publish release
-    needs: [android, android-tv, windows]
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && (needs.android.result == 'success' || needs.android-tv.result == 'success' || needs.windows.result == 'success') }}
+    needs: [windows]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.windows.result == 'success' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Download builds
@@ -498,16 +240,11 @@ jobs:
         run: |
           tag="live-tv-build-${GITHUB_RUN_NUMBER}"
           cat > notes.md <<'NOTES'
-          **Android phone and tablet:** download `Nuvio-LiveTV-Android-phone.apk`, open it, and allow installing from this source when asked.
-          It installs next to the official Nuvio app as **Nuvio Live TV**. The `older-32bit`, `x86` and `x86_64` files are for unusual devices; most phones want the `phone` file.
-
-          **Android TV, Google TV and Fire TV:** download `Nuvio-LiveTV-Android-TV.apk` and install it on the TV.
-          It installs next to the official Nuvio app as **Nuvio Live TV**, with a TV launcher entry and a couch-distance guide layout.
-          Fire TV does not show app-provided home screen rows, so those are skipped there.
-
           **Windows desktop:** download `Nuvio-LiveTV-Windows.msi` and double-click it.
           It replaces the regular Nuvio desktop app and keeps your settings. If Nuvio later offers an app update, skip it: that update doesn't include Live TV.
 
           Sign in with your Nuvio account, then open the **Live TV** tab and paste your addon's manifest link.
+
+          Android phones and iPhones/iPad: see the releases of dslayer6989/NuvioMobile. Android TV: see the releases of dslayer6989/NuvioTV.
           NOTES
           gh release create "${tag}" dist/* --title "Nuvio Live TV — build ${GITHUB_RUN_NUMBER}" --notes-file notes.md --target "${GITHUB_SHA}" --latest

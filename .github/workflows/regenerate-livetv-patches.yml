@@ -1,8 +1,8 @@
 name: Regenerate Live TV patches
 
 # Run by hand: Actions tab > Regenerate Live TV patches > Run workflow.
-# Adds backlog items 1, 6 and 7 on top of the current patches, runs the Live TV tests on the
-# desktop code, and offers the new .patch files as a download. It never pushes anything.
+# Adds backlog items 1, 6 and 7 on top of the current Windows patch, runs the Live TV tests on the
+# desktop code, and offers the new .patch file as a download. It never pushes anything.
 # It reads two helper files from .github/livetv-tools in this repository.
 
 on:
@@ -16,8 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  NUVIO_DESKTOP_COMMIT: b1e00724c55e65f8f325d4d9d52eb6827872a7c2
-  NUVIO_MOBILE_COMMIT: c1065d0a2a717d7dba445257f064f3fb8d1b30a3
+  NUVIO_DESKTOP_COMMIT: e808a584e937d3ce148f5e023180586bc3545002
   NUVIO_API_URL: https://api.nuvio.tv
   NUVIO_API_KEY: sb_publishable_1Clq8rlTVACkdcZuqr6_AD__xUUC_EN
 
@@ -32,7 +31,6 @@ jobs:
           path: fork
           sparse-checkout: |
             windows-live-tv.patch
-            android-live-tv.patch
             .github/livetv-tools/
           sparse-checkout-cone-mode: false
 
@@ -44,13 +42,6 @@ jobs:
           path: desktop
           lfs: true
 
-      - name: Get the official Nuvio Mobile source
-        uses: actions/checkout@v6
-        with:
-          repository: NuvioMedia/NuvioMobile
-          ref: ${{ env.NUVIO_MOBILE_COMMIT }}
-          path: mobile
-
       - name: Rebuild the patches
         run: |
           set -euo pipefail
@@ -59,15 +50,14 @@ jobs:
           git config --global core.autocrlf false
           mkdir -p "${GITHUB_WORKSPACE}/out"
           tools="${GITHUB_WORKSPACE}/fork/.github/livetv-tools"
-          for f in edit_livetv.py phone_cleanup.py add_logging.py LiveTvStateTest.kt; do
+          for f in edit_livetv.py add_logging.py LiveTvStateTest.kt; do
             if [[ ! -f "${tools}/${f}" ]]; then
               echo "::error::${f} was not found in .github/livetv-tools of your repository. Add it, then run this again."
               exit 1
             fi
           done
-          python3 -m py_compile "${tools}/edit_livetv.py" "${tools}/phone_cleanup.py" "${tools}/add_logging.py"
+          python3 -m py_compile "${tools}/edit_livetv.py" "${tools}/add_logging.py"
           edit="${tools}/edit_livetv.py"
-          phone_cleanup="${tools}/phone_cleanup.py"
           logging="${tools}/add_logging.py"
           test_src="${tools}/LiveTvStateTest.kt"
           test_rel="composeApp/src/commonTest/kotlin/com/nuvio/app/features/livetv/LiveTvStateTest.kt"
@@ -89,18 +79,8 @@ jobs:
               git commit -q -m "Current patch"
             fi
             python3 "${edit}" "${PWD}"
-            # The Android phone build is phone-only; Android TV has its own patch and release.
-            if [[ "${repo}" == "mobile" ]]; then
-              python3 "${phone_cleanup}" "${PWD}"
-            fi
-            # Persistent file logging: the desktop repo installs from Main.kt, the mobile repo
-            # from MainActivity.kt. Both repos declare android/desktop/ios targets, so the
-            # script writes all four files in both.
-            if [[ "${repo}" == "desktop" ]]; then
-              python3 "${logging}" "${PWD}" desktop
-            else
-              python3 "${logging}" "${PWD}" mobile
-            fi
+            # Persistent file logging: the desktop repo installs from Main.kt.
+            python3 "${logging}" "${PWD}" desktop
             mkdir -p "$(dirname "${test_rel}")"
             cp "${test_src}" "${test_rel}"
             git add -A
@@ -125,8 +105,6 @@ jobs:
 
           regen desktop "${NUVIO_DESKTOP_COMMIT}" "${GITHUB_WORKSPACE}/fork/windows-live-tv.patch" \
             "${GITHUB_WORKSPACE}/out/windows-live-tv.patch" "composeApp"
-          regen mobile "${NUVIO_MOBILE_COMMIT}" "${GITHUB_WORKSPACE}/fork/android-live-tv.patch" \
-            "${GITHUB_WORKSPACE}/out/android-live-tv.patch" "."
           ls -la "${GITHUB_WORKSPACE}/out"
 
       # Nuvio's desktop build compiles two native Linux libraries, even when only running tests.
